@@ -52,16 +52,11 @@ analysis_pipeline = SequentialAgent(
 
 # --- Root Orchestrator ---
 # Full pipeline (used in CLI mode without HITL)
+# Uses the two sub-pipelines as children to avoid double-parenting agents.
 root_orchestrator = SequentialAgent(
     name="compete_iq_orchestrator",
     description="CompeteIQ: Full competitor analysis pipeline",
-    sub_agents=[
-        company_profiler_agent,
-        competitor_finder_agent,
-        competitor_analyst_agent,
-        gap_analyst_agent,
-        strategy_advisor_agent,
-    ],
+    sub_agents=[discovery_pipeline, analysis_pipeline],
 )
 
 
