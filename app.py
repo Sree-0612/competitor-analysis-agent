@@ -20,6 +20,84 @@ import plotly.express as px
 from config.settings import APP_NAME, APP_VERSION, GOOGLE_API_KEY, TAVILY_API_KEY
 from tools.security import validate_url, rate_limiter, sanitize_output
 from agents.orchestrator import run_discovery_phase, run_analysis_phase
+from tools.memory import list_recent_analyses
+
+
+def build_pdf_report(target: str, competitors: list, parsed: dict, fallback_text: str) -> bytes:
+    """
+    Build a clean executive-summary PDF from the analysis results.
+    Uses fpdf2 (pure Python, no system dependencies).
+    """
+    from fpdf import FPDF
+
+    def clean(text: str) -> str:
+        # fpdf2 core fonts are latin-1; strip unsupported chars
+        return str(text).encode("latin-1", "replace").decode("latin-1")
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    # Header
+    pdf.set_font("Helvetica", "B", 20)
+    pdf.set_text_color(26, 115, 232)
+    pdf.cell(0, 12, clean("CompeteIQ - Competitive Analysis Report"), ln=True)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(100, 100, 100)
+    pdf.cell(0, 6, clean(f"Target: {target}"), ln=True)
+    pdf.cell(0, 6, clean(f"Competitors: {', '.join(competitors)}"), ln=True)
+    pdf.cell(0, 6, clean(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}"), ln=True)
+    pdf.ln(4)
+
+    def section(title: str):
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.set_text_color(30, 41, 59)
+        pdf.cell(0, 9, clean(title), ln=True)
+        pdf.set_font("Helvetica", "", 11)
+        pdf.set_text_color(0, 0, 0)
+
+    def body(text: str):
+        pdf.multi_cell(0, 6, clean(text))
+        pdf.ln(1)
+
+    if parsed:
+        if parsed.get("executive_summary"):
+            section("Executive Summary")
+            body(parsed["executive_summary"])
+        if parsed.get("aha_insight"):
+            section("The 'Aha' Insight")
+            body(parsed["aha_insight"])
+        if parsed.get("strategy_framework"):
+            section("Strategic Framework")
+            body(parsed["strategy_framework"])
+        if parsed.get("recommendations"):
+            section("Strategic Recommendations")
+            for i, rec in enumerate(parsed["recommendations"], 1):
+                pdf.set_font("Helvetica", "B", 11)
+                body(f"{i}. [{rec.get('priority', 'MEDIUM')}] {rec.get('title', 'Recommendation')}")
+                pdf.set_font("Helvetica", "", 11)
+                if rec.get("play"):
+                    body(f"   Play: {rec['play']}")
+                if rec.get("description"):
+                    body(f"   {rec['description']}")
+                if rec.get("timeline"):
+                    body(f"   Timeline: {rec['timeline']}")
+        if parsed.get("quick_wins"):
+            section("Quick Wins")
+            for qw in parsed["quick_wins"]:
+                body(f"- {qw}")
+        if parsed.get("risk_if_no_action"):
+            section("Risk of Inaction")
+            body(parsed["risk_if_no_action"])
+    else:
+        section("Analysis Report")
+        body(fallback_text[:3000])
+
+    out = pdf.output(dest="S")
+    # fpdf2 returns bytearray/str depending on version; normalize to bytes
+    if isinstance(out, (bytes, bytearray)):
+        return bytes(out)
+    return out.encode("latin-1")
 
 
 # --- Page Configuration ---
@@ -95,9 +173,21 @@ with st.sidebar:
     **5 AI Agents** orchestrated sequentially:
     1. 🏢 Company Profiler
     2. 🔍 Competitor Finder
-    3. 📊 Competitor Analyst
-    4. 🔬 Gap Analyst
-    5. 💡 Strategy Advisor
+    3. � **Human-in-the-Loop Gate**
+    4. 📊 Competitor Analyst
+    5. 🔬 Gap Analyst
+    6. 💡 Strategy Advisor
+    """)
+
+    st.divider()
+    st.markdown("#### ⚡ Capabilities")
+    st.markdown("""
+    - 🧠 Jina Reader (anti-bot scraping)
+    - 🗣️ Reddit/G2/Trustpilot sentiment
+    - 🔗 Source-grounded citations
+    - 📈 Executive dashboard (Plotly)
+    - 🕐 Temporal memory (SQLite)
+    - 📄 PDF export
     """)
 
     st.divider()
@@ -113,6 +203,18 @@ with st.sidebar:
     st.markdown("#### 📊 Session Stats")
     analyses_done = len(st.session_state.analysis_history)
     st.metric("Analyses This Session", analyses_done)
+
+    # Temporal memory — past analyses across sessions
+    recent = list_recent_analyses(limit=5)
+    if recent:
+        st.markdown("#### 🧠 Analysis Memory")
+        st.caption("Past runs (temporal intelligence)")
+        for r in recent:
+            try:
+                ts = datetime.fromisoformat(r["created_at"]).strftime("%b %d, %H:%M")
+            except (ValueError, TypeError):
+                ts = ""
+            st.markdown(f"- **{r.get('company_name') or 'Unknown'}** · {ts}")
 
     # API key status
     if GOOGLE_API_KEY and TAVILY_API_KEY:
@@ -345,6 +447,8 @@ elif st.session_state.phase == "analysis":
         st.session_state.analysis_result = result["raw_output"]
         st.session_state.competitor_analysis = result.get("competitor_analysis", "")
         st.session_state.gap_analysis = result.get("gap_analysis", "")
+        st.session_state.analysis_sources = result.get("sources", [])
+        st.session_state.previous_analysis = result.get("previous_analysis", None)
         st.session_state.analysis_history.append({
             "url": st.session_state.target_url,
             "timestamp": datetime.now().isoformat(),
@@ -367,6 +471,26 @@ elif st.session_state.phase == "results":
                 f"**Competitors:** {', '.join(st.session_state.confirmed_competitors)} | "
                 f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M')}")
 
+    # --- Temporal Intelligence: what changed since last run ---
+    prev = st.session_state.get("previous_analysis")
+    if prev and prev.get("created_at"):
+        try:
+            prev_dt = datetime.fromisoformat(prev["created_at"]).strftime("%Y-%m-%d %H:%M")
+        except (ValueError, TypeError):
+            prev_dt = prev["created_at"]
+        prev_comps = prev.get("competitors", [])
+        curr_comps = st.session_state.confirmed_competitors
+        new_comps = [c for c in curr_comps if c not in prev_comps]
+        dropped_comps = [c for c in prev_comps if c not in curr_comps]
+
+        with st.container():
+            st.info(
+                f"🧠 **Temporal Intelligence** — This company was last analyzed on **{prev_dt}**. "
+                + (f"New competitors on the radar: **{', '.join(new_comps)}**. " if new_comps else "")
+                + (f"No longer tracked: {', '.join(dropped_comps)}. " if dropped_comps else "")
+                + ("Competitive set is stable since last run." if not new_comps and not dropped_comps else "")
+            )
+
     st.divider()
 
     # Parse and display results
@@ -383,17 +507,31 @@ elif st.session_state.phase == "results":
         pass
 
     # --- Results Tabs ---
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📋 Executive Summary",
         "📊 Gap Analysis",
         "💡 Recommendations",
         "📈 Visualizations",
+        "🔗 Sources",
     ])
 
     with tab1:
         if parsed_result and "executive_summary" in parsed_result:
             st.markdown(f"#### Executive Summary")
             st.info(parsed_result["executive_summary"])
+
+            # The "Aha" insight — the single non-obvious competitive lever
+            if parsed_result.get("aha_insight"):
+                st.markdown("#### 💡 The 'Aha' Insight")
+                st.success(f"**{parsed_result['aha_insight']}**")
+
+            if parsed_result.get("strategy_framework"):
+                st.markdown("#### 🧭 Strategic Framework Applied")
+                st.markdown(f"📐 {parsed_result['strategy_framework']}")
+
+            if "competitive_moat" in parsed_result:
+                st.markdown("#### 🏰 Competitive Moat")
+                st.markdown(parsed_result["competitive_moat"])
 
             if "risk_if_no_action" in parsed_result:
                 st.warning(f"⚠️ **Risk of Inaction:** {parsed_result['risk_if_no_action']}")
@@ -407,9 +545,11 @@ elif st.session_state.phase == "results":
             for i, gap in enumerate(parsed_result["gaps"], 1):
                 impact = gap.get("impact", "medium")
                 icon = "🔴" if impact == "high" else "🟡" if impact == "medium" else "🟢"
+                src = gap.get("source", "")
+                src_link = f" · [source]({src})" if src and src.startswith("http") else ""
                 st.markdown(
                     f"{icon} **Gap {i}:** {gap.get('description', 'N/A')} "
-                    f"*(from {gap.get('competitor', 'competitor')})*"
+                    f"*(from {gap.get('competitor', 'competitor')})*{src_link}"
                 )
 
             if "advantages" in parsed_result:
@@ -418,6 +558,41 @@ elif st.session_state.phase == "results":
                     st.markdown(f"✅ **{adv.get('description', 'N/A')}**")
         else:
             st.markdown(sanitized_result)
+
+        # --- Alternative Data: what customers really say (Reddit/G2/Trustpilot) ---
+        comp_analysis_raw = st.session_state.get("competitor_analysis", "")
+        comp_analysis_data = None
+        try:
+            if comp_analysis_raw and "{" in comp_analysis_raw:
+                cjson = comp_analysis_raw[comp_analysis_raw.index("{"):comp_analysis_raw.rindex("}") + 1]
+                comp_analysis_data = json.loads(cjson)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        if comp_analysis_data and comp_analysis_data.get("competitor_profiles"):
+            has_sentiment = any(
+                p.get("customer_sentiment") for p in comp_analysis_data["competitor_profiles"]
+            )
+            if has_sentiment:
+                st.divider()
+                st.markdown("#### 🗣️ Voice of the Customer (Alternative Data)")
+                st.caption("What real users say on Reddit, G2 & Trustpilot — the hidden truth beyond official marketing")
+                for prof in comp_analysis_data["competitor_profiles"]:
+                    sentiment = prof.get("customer_sentiment")
+                    if not sentiment:
+                        continue
+                    score = sentiment.get("sentiment_score", "?")
+                    with st.expander(f"💬 {prof.get('name', 'Competitor')} — sentiment {score}/10"):
+                        pos = sentiment.get("positive", [])
+                        neg = sentiment.get("negative", [])
+                        if pos:
+                            st.markdown("**👍 Customers praise:**")
+                            for p in pos:
+                                st.markdown(f"- {p}")
+                        if neg:
+                            st.markdown("**👎 Customers complain:**")
+                            for n in neg:
+                                st.markdown(f"- {n}")
 
     with tab3:
         if parsed_result and "recommendations" in parsed_result:
@@ -428,10 +603,17 @@ elif st.session_state.phase == "results":
                 color = "red" if priority == "HIGH" else "orange" if priority == "MEDIUM" else "green"
 
                 with st.expander(f"{'🔴' if priority == 'HIGH' else '🟡' if priority == 'MEDIUM' else '🟢'} [{priority}] {rec.get('title', 'Recommendation')}"):
-                    st.markdown(f"**What:** {rec.get('description', 'N/A')}")
+                    if rec.get("play"):
+                        st.markdown(f"🎯 **The Play:** {rec['play']}")
+                    if rec.get("framework"):
+                        st.caption(f"📐 Framework: {rec['framework']}")
+                    st.markdown(f"**What & Why:** {rec.get('description', 'N/A')}")
                     st.markdown(f"**Timeline:** {rec.get('timeline', 'N/A')}")
                     st.markdown(f"**Expected Impact:** {rec.get('expected_impact', 'N/A')}")
                     st.markdown(f"**Addresses:** {rec.get('addresses_gap', 'N/A')}")
+                    ev = rec.get("evidence_url", "")
+                    if ev and ev.startswith("http"):
+                        st.markdown(f"🔗 **Evidence:** [{ev[:60]}...]({ev})")
 
             if "quick_wins" in parsed_result:
                 st.markdown("#### ⚡ Quick Wins (This Week)")
@@ -574,8 +756,58 @@ elif st.session_state.phase == "results":
         st.divider()
 
         # ═══════════════════════════════════════════════════════════
-        # CHART 2: Competitive Strength Heatmap
+        # CHART 1B: Feature Parity Matrix (red/green tick-box table)
         # ═══════════════════════════════════════════════════════════
+        st.markdown("##### ✅ Feature Parity Matrix")
+        st.caption("Green ✅ = has feature · Red ❌ = missing — at-a-glance capability comparison")
+
+        feature_matrix = gap_data.get("feature_matrix") if gap_data else None
+        if feature_matrix and feature_matrix.get("features") and feature_matrix.get("companies"):
+            features = feature_matrix["features"]
+            companies_map = feature_matrix["companies"]
+
+            # Build a Plotly table with colored cells
+            header_vals = ["<b>Feature</b>"] + [f"<b>{c}</b>" for c in companies_map.keys()]
+
+            # Rows: each feature, then ✅/❌ per company
+            cell_text = [features]  # first column = feature names
+            cell_colors = [["#f1f5f9"] * len(features)]  # feature column bg
+
+            for comp, has_list in companies_map.items():
+                col_symbols = []
+                col_colors = []
+                for i in range(len(features)):
+                    has_it = has_list[i] if i < len(has_list) else False
+                    col_symbols.append("✅" if has_it else "❌")
+                    col_colors.append("#dcfce7" if has_it else "#fee2e2")
+                cell_text.append(col_symbols)
+                cell_colors.append(col_colors)
+
+            fig_matrix = go.Figure(data=[go.Table(
+                header=dict(
+                    values=header_vals,
+                    fill_color="#1e293b",
+                    font=dict(color="white", size=13),
+                    align="center",
+                    height=36,
+                ),
+                cells=dict(
+                    values=cell_text,
+                    fill_color=cell_colors,
+                    align=["left"] + ["center"] * len(companies_map),
+                    font=dict(size=14),
+                    height=32,
+                ),
+            )])
+            fig_matrix.update_layout(
+                height=min(120 + 34 * len(features), 500),
+                margin=dict(t=10, b=10, l=0, r=0),
+            )
+            st.plotly_chart(fig_matrix, use_container_width=True)
+        else:
+            st.info("Feature parity matrix not available for this analysis.")
+
+        st.divider()
         st.markdown("##### 🔥 Competitive Strength Heatmap")
         st.caption("Side-by-side comparison scores (10 = strongest)")
 
@@ -817,10 +1049,55 @@ elif st.session_state.phase == "results":
             else:
                 st.error(f"⚠️ **Vulnerable Position** — More gaps ({n_gaps}) than advantages ({n_advantages}). Prioritize gap closure.")
 
+    with tab5:
+        st.markdown("#### 🔗 Source-Grounded Citations")
+        st.caption("Every insight is traceable. Click any link to verify the data is real — no hallucinations.")
+
+        sources = st.session_state.get("analysis_sources", [])
+
+        # Also pull explicit source claims from the strategy output
+        strategy_sources = parsed_result.get("sources", []) if parsed_result else []
+
+        if strategy_sources:
+            st.markdown("##### 📌 Key Claims & Their Sources")
+            for s in strategy_sources:
+                url = s.get("url", "")
+                claim = s.get("claim", "")
+                if url and url.startswith("http"):
+                    st.markdown(f"- *\"{claim}\"* — [{url[:50]}...]({url})")
+                elif claim:
+                    st.markdown(f"- *\"{claim}\"*")
+            st.divider()
+
+        if sources:
+            st.markdown("##### 🌐 All Data Sources Consulted")
+            # Group by platform
+            by_platform = {}
+            for s in sources:
+                platform = s.get("platform", "Web")
+                by_platform.setdefault(platform, []).append(s)
+
+            platform_icons = {
+                "Reddit": "👽", "Trustpilot": "⭐", "G2": "🅶",
+                "SiteJabber": "📝", "Capterra": "🗂️", "Product Hunt": "🐱", "Web": "🌐",
+            }
+            for platform, items in by_platform.items():
+                icon = platform_icons.get(platform, "🌐")
+                st.markdown(f"**{icon} {platform}** ({len(items)})")
+                seen_urls = set()
+                for s in items:
+                    url = s.get("url", "")
+                    if url and url not in seen_urls and url.startswith("http"):
+                        seen_urls.add(url)
+                        title = s.get("title", url)[:70]
+                        st.markdown(f"- [{title}]({url})")
+        elif not strategy_sources:
+            st.info("Source citations will appear here after running an analysis.")
+
     st.divider()
 
     # Action buttons
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         if st.button("🔄 New Analysis", type="primary"):
             st.session_state.phase = "input"
@@ -829,13 +1106,30 @@ elif st.session_state.phase == "results":
     with col2:
         # Download as JSON
         st.download_button(
-            "📥 Download Report (JSON)",
+            "📥 JSON",
             data=json.dumps(parsed_result or {"report": sanitized_result}, indent=2),
             file_name=f"competeiq_report_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
             mime="application/json",
         )
     with col3:
-        st.markdown(f"*Analysis completed at {datetime.now().strftime('%H:%M:%S')}*")
+        # Download as PDF (executive summary)
+        try:
+            pdf_bytes = build_pdf_report(
+                target=st.session_state.target_url,
+                competitors=st.session_state.confirmed_competitors,
+                parsed=parsed_result,
+                fallback_text=sanitized_result,
+            )
+            st.download_button(
+                "📄 PDF",
+                data=pdf_bytes,
+                file_name=f"competeiq_report_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                mime="application/pdf",
+            )
+        except Exception:
+            st.caption("PDF unavailable")
+    with col4:
+        st.markdown(f"*Done at {datetime.now().strftime('%H:%M:%S')}*")
 
 
 # --- Footer ---

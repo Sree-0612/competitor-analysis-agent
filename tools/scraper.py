@@ -1,7 +1,13 @@
 """
-CompeteIQ - Web Scraping Tool
+CompeteIQ - Web Intelligence Tool
 Extracts structured information from company websites.
-Uses httpx (sync) + BeautifulSoup for HTML parsing.
+
+Two-tier strategy:
+  1. Jina Reader (https://r.jina.ai) - converts JS-heavy sites to clean Markdown,
+     bypassing anti-bot measures that stop 90% of basic scrapers. Free, no API key.
+  2. httpx + BeautifulSoup fallback - if Jina is unavailable.
+
+LLMs perform significantly better on clean Markdown than raw HTML.
 """
 
 import httpx
@@ -11,22 +17,115 @@ from typing import Optional
 from config.settings import REQUEST_TIMEOUT
 
 
+JINA_READER_ENDPOINT = "https://r.jina.ai/"
+
+
 def scrape_website(url: str) -> dict:
     """
-    Scrape a website and extract key business information.
-    
-    This tool fetches a company's website and extracts:
-    - Page title and meta description
-    - Main headings (product names, features)
-    - Navigation links (reveals site structure)
-    - Key content paragraphs
-    
+    Extract business intelligence from a website.
+
+    Strategy: try Jina Reader first (clean Markdown, handles JavaScript &
+    anti-bot), then fall back to direct httpx + BeautifulSoup scraping.
+
     Args:
-        url: The website URL to scrape
-        
+        url: The website URL to analyze
+
     Returns:
-        Dictionary with extracted content or error details
+        Dictionary with extracted content or error details.
+        Includes 'method' key indicating which engine succeeded.
     """
+    # --- Tier 1: Jina Reader (JS rendering + anti-bot bypass) ---
+    jina_result = _scrape_with_jina(url)
+    if jina_result.get("success"):
+        return jina_result
+
+    # --- Tier 2: Direct httpx + BeautifulSoup fallback ---
+    return _scrape_with_httpx(url)
+
+
+def _scrape_with_jina(url: str) -> dict:
+    """
+    Fetch a URL via Jina Reader, returning clean Markdown.
+
+    Jina renders JavaScript and bypasses common anti-bot measures,
+    then returns LLM-optimized Markdown. Free tier, no API key required.
+    """
+    try:
+        headers = {
+            "Accept": "text/markdown",
+            "X-Return-Format": "markdown",
+            "User-Agent": "CompeteIQ/1.0 (+https://competeiq.streamlit.app)",
+        }
+        with httpx.Client(timeout=REQUEST_TIMEOUT, follow_redirects=True) as client:
+            response = client.get(f"{JINA_READER_ENDPOINT}{url}", headers=headers)
+            response.raise_for_status()
+
+        markdown = response.text or ""
+        if len(markdown.strip()) < 50:
+            return {"success": False, "error": "Jina returned insufficient content."}
+
+        title, meta_description, headings = _parse_markdown_structure(markdown)
+
+        return {
+            "success": True,
+            "method": "jina-reader",
+            "url": url,
+            "title": title,
+            "meta_description": meta_description,
+            "headings": headings[:20],
+            "main_content": markdown[:5000],  # Markdown is denser than HTML text
+            "key_links": _extract_markdown_links(markdown)[:15],
+        }
+    except Exception as e:
+        return {"success": False, "error": f"Jina Reader unavailable: {str(e)[:100]}"}
+
+
+def _parse_markdown_structure(markdown: str) -> tuple[str, str, list[str]]:
+    """Extract title, description, and headings from Markdown."""
+    lines = markdown.split("\n")
+    title = "Unknown"
+    meta_description = ""
+    headings: list[str] = []
+
+    # Jina prepends 'Title:' and 'URL Source:' metadata lines
+    for line in lines[:8]:
+        if line.startswith("Title:"):
+            title = line.replace("Title:", "").strip()
+        elif line.startswith("Markdown Content:"):
+            break
+
+    for line in lines:
+        stripped = line.strip()
+        # Markdown headings (#, ##, ###)
+        if stripped.startswith("#"):
+            heading_text = stripped.lstrip("#").strip()
+            if 3 < len(heading_text) < 200:
+                headings.append(heading_text)
+        # First substantial paragraph as description
+        elif not meta_description and len(stripped) > 60 and not stripped.startswith(("#", "-", "*", "|", "!", "[")):
+            meta_description = stripped[:300]
+
+    if title == "Unknown" and headings:
+        title = headings[0]
+
+    return title, meta_description, headings
+
+
+def _extract_markdown_links(markdown: str) -> list[str]:
+    """Extract anchor text from Markdown links [text](url)."""
+    import re
+    links = []
+    seen = set()
+    for match in re.finditer(r"\[([^\]]+)\]\([^)]+\)", markdown):
+        text = match.group(1).strip()
+        if 2 < len(text) < 50 and text.lower() not in seen and not text.startswith("!"):
+            seen.add(text.lower())
+            links.append(text)
+    return links
+
+
+def _scrape_with_httpx(url: str) -> dict:
+    """Direct HTML scraping fallback using httpx + BeautifulSoup."""
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
@@ -57,6 +156,7 @@ def scrape_website(url: str) -> dict:
 
         return {
             "success": True,
+            "method": "httpx-beautifulsoup",
             "url": url,
             "title": title,
             "meta_description": meta_description,

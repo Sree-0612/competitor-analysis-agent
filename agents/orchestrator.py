@@ -22,7 +22,12 @@ from google import genai
 from google.genai import types
 
 from tools.scraper import scrape_website
-from tools.search import search_competitors, search_company_details
+from tools.search import (
+    search_competitors,
+    search_company_details,
+    search_social_sentiment,
+)
+from tools.memory import save_analysis, get_previous_analysis
 from config.settings import GOOGLE_API_KEY, MODEL_NAME, APP_NAME
 
 
@@ -65,7 +70,14 @@ OUTPUT FORMAT (respond ONLY with this JSON, no other text):
 Only include DIRECT competitors. Be factual."""
 
 COMPETITOR_ANALYST_INSTRUCTION = """You are a Competitive Intelligence Analyst performing deep competitor research.
-Given search results about competitors, compile detailed profiles for each.
+You have TWO data sources: (1) official web search results, and (2) SOCIAL SENTIMENT
+from Reddit, G2, and Trustpilot revealing what real customers actually say.
+
+CRITICAL: Official sources tell you what a company WANTS you to hear. Social sentiment
+reveals the HIDDEN TRUTH. Surface non-obvious insights (e.g. "Official site praises the UI,
+but Reddit users complain it's laggy vs. competitors").
+
+For every factual claim, cite the source URL it came from.
 
 OUTPUT FORMAT (respond ONLY with this JSON, no other text):
 {
@@ -78,15 +90,26 @@ OUTPUT FORMAT (respond ONLY with this JSON, no other text):
             "pricing_tier": "budget/mid-range/premium/luxury",
             "strengths": ["Strength 1", "Strength 2"],
             "weaknesses": ["Weakness 1", "Weakness 2"],
+            "customer_sentiment": {
+                "positive": ["What customers praise (from reviews)"],
+                "negative": ["What customers complain about (from reviews)"],
+                "sentiment_score": 7
+            },
             "recent_launches": ["Latest product/initiative"],
-            "target_audience": "Who they serve"
+            "target_audience": "Who they serve",
+            "sources": ["https://url-of-a-claim", "https://another-source"]
         }
+    ],
+    "key_sources": [
+        {"claim": "Specific factual claim made", "url": "https://source-url", "platform": "Reddit/G2/Web"}
     ]
 }
-Be thorough and factual. Focus on current info (2024-2025)."""
+Be thorough and factual. sentiment_score is 1-10. Focus on current info (2024-2025).
+Populate 'sources' and 'key_sources' with REAL URLs from the provided search results."""
 
 GAP_ANALYST_INSTRUCTION = """You are a Strategic Gap Analysis Expert.
 Compare the target company against competitors to identify gaps and advantages.
+Also produce a FEATURE PARITY MATRIX for a red/green comparison table.
 
 OUTPUT FORMAT (respond ONLY with this JSON, no other text):
 {
@@ -95,7 +118,8 @@ OUTPUT FORMAT (respond ONLY with this JSON, no other text):
             "description": "What competitor has that you don't",
             "competitor": "Which competitor",
             "impact": "high/medium/low",
-            "category": "product/pricing/technology/brand/customer/sustainability"
+            "category": "product/pricing/technology/brand/customer/sustainability",
+            "source": "https://url-backing-this-claim"
         }
     ],
     "advantages": [
@@ -105,34 +129,64 @@ OUTPUT FORMAT (respond ONLY with this JSON, no other text):
             "category": "product/pricing/technology/brand/customer/sustainability"
         }
     ],
+    "feature_matrix": {
+        "features": ["Feature/Capability 1", "Feature 2", "Feature 3", "Feature 4", "Feature 5"],
+        "companies": {
+            "TargetCompanyName": [true, false, true, true, false],
+            "Competitor1": [true, true, true, false, true],
+            "Competitor2": [false, true, true, true, false]
+        }
+    },
     "parity_areas": ["Areas where roughly equal"],
     "overall_position": "Brief competitive standing assessment",
     "biggest_threat": "Single biggest competitive threat"
 }
-Be specific and actionable. Minimum 3 gaps and 2 advantages."""
+The feature_matrix booleans indicate whether each company HAS each feature (true=yes/green,
+false=no/red). Use the SAME feature order for every company. Include the target company first.
+Be specific and actionable. Minimum 3 gaps and 2 advantages. Attach source URLs to gaps."""
 
 STRATEGY_ADVISOR_INSTRUCTION = """You are a Chief Strategy Officer providing competitive intelligence recommendations.
 Based on gap analysis, generate a prioritized strategic action plan.
 
+CRITICAL RULES — this is what separates a $100k consulting insight from generic AI slop:
+1. DO NOT give generic advice like "improve your technology" or "enhance marketing".
+   Give 3 SPECIFIC engineering or marketing 'plays' the company can execute in the next 6 months.
+   BAD:  "Improve the user interface."
+   GOOD: "Add a 15-inch OLED rear-passenger display because the competitor just shipped one
+          and Reddit users cite it as their top reason for switching."
+2. Apply a named strategy framework: "Jobs to be Done" (JTBD) or "Blue Ocean Strategy".
+   State which framework each play uses.
+3. GROUND every claim in evidence. When you reference a competitor fact, cite the source URL.
+4. Find the 'Aha' insight — one specific, non-obvious gap that is the SINGLE biggest lever.
+
 OUTPUT FORMAT (respond ONLY with this JSON, no other text):
 {
     "executive_summary": "2-3 sentence overview of position and key action needed",
+    "aha_insight": "The single most surprising, non-obvious competitive insight discovered",
+    "strategy_framework": "Blue Ocean Strategy / Jobs to be Done — and why it applies here",
     "recommendations": [
         {
             "priority": "HIGH/MEDIUM/LOW",
             "title": "Short action title",
-            "description": "What to do and why",
+            "play": "The SPECIFIC engineering/marketing play — concrete, not generic",
+            "framework": "JTBD / Blue Ocean — which framework this play uses",
+            "description": "What to do and why, grounded in competitor evidence",
             "addresses_gap": "Which gap this fixes",
             "timeline": "Quick Win (1-3 months) / Medium Term (3-6 months) / Long Term (6-12 months)",
-            "expected_impact": "What improvement to expect"
+            "expected_impact": "Quantified improvement to expect",
+            "evidence_url": "https://source-supporting-this-play"
         }
     ],
-    "quick_wins": ["Immediate actions achievable this week"],
+    "quick_wins": ["Immediate specific actions achievable this week"],
     "competitive_moat": "Strongest advantage and how to protect it",
     "risk_if_no_action": "What happens if gaps not addressed",
-    "industry_trend_alignment": "How recommendations align with industry direction"
+    "industry_trend_alignment": "How recommendations align with industry direction",
+    "sources": [
+        {"claim": "A specific claim used in the strategy", "url": "https://source-url"}
+    ]
 }
-Maximum 6 recommendations. At least 1 Quick Win. Be specific, not generic."""
+Maximum 6 recommendations. At least 1 Quick Win. Every 'play' must be specific and evidence-backed.
+Populate evidence_url and sources with REAL URLs from the provided data."""
 
 
 def _get_client() -> genai.Client:
@@ -158,9 +212,17 @@ def _call_agent(instruction: str, user_message: str) -> str:
     return response.text or ""
 
 
-# ============================================================
-# PHASE 1: DISCOVERY PIPELINE
-# ============================================================
+def _extract_name_industry(company_profile: str) -> tuple[str, str]:
+    """Parse company name and industry from a profile JSON string."""
+    try:
+        if company_profile and "{" in company_profile:
+            data = json.loads(
+                company_profile[company_profile.index("{"):company_profile.rindex("}") + 1]
+            )
+            return data.get("name", ""), data.get("industry", "")
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return "", ""
 
 def run_discovery_phase(url: str, session_id: str = "default") -> dict:
     """
@@ -262,21 +324,46 @@ def run_analysis_phase(
         except (json.JSONDecodeError, TypeError):
             competitor_names = [c.strip() for c in competitors.split("\n") if c.strip()]
 
-        # Search for each competitor's details
+        # Search for each competitor's details + social sentiment (alternative data)
         all_search_results = {}
+        all_sources = []  # Collect every source URL for citations
         for name in competitor_names[:4]:
-            result = search_company_details(name)
-            all_search_results[name] = result
+            details = search_company_details(name)
+            sentiment = search_social_sentiment(name)
+            all_search_results[name] = {
+                "official": details,
+                "social_sentiment": sentiment,
+            }
+            # Harvest source URLs for grounded citations
+            for r in details.get("results", []):
+                if r.get("url"):
+                    all_sources.append({
+                        "company": name,
+                        "title": r.get("title", ""),
+                        "url": r["url"],
+                        "platform": "Web",
+                    })
+            for r in sentiment.get("results", []):
+                if r.get("url"):
+                    all_sources.append({
+                        "company": name,
+                        "title": r.get("title", ""),
+                        "url": r["url"],
+                        "platform": r.get("source", "Web"),
+                    })
 
-        analyst_input = f"""Analyze these competitors in detail based on search results.
+        analyst_input = f"""Analyze these competitors in detail using BOTH official search results
+and social sentiment (Reddit/G2/Trustpilot). Surface the hidden truth customers reveal.
 
 TARGET COMPANY PROFILE:
 {company_profile}
 
-COMPETITOR SEARCH RESULTS:
-{json.dumps(all_search_results, indent=2)[:4000]}
+COMPETITOR DATA (official + social sentiment):
+{json.dumps(all_search_results, indent=2)[:6000]}
 
-Competitors to analyze: {', '.join(competitor_names)}"""
+Competitors to analyze: {', '.join(competitor_names)}
+
+Remember: cite REAL source URLs from the data above for your claims."""
 
         competitor_analysis = _call_agent(COMPETITOR_ANALYST_INSTRUCTION, analyst_input)
 
@@ -292,7 +379,12 @@ COMPETITOR PROFILES:
         gap_analysis = _call_agent(GAP_ANALYST_INSTRUCTION, gap_input)
 
         # --- Agent 5: Strategy Advisor ---
-        strategy_input = f"""Based on this gap analysis, generate strategic recommendations.
+        # Provide harvested sources so the agent can ground its claims
+        sources_context = "\n".join(
+            f"- [{s['platform']}] {s['title']}: {s['url']}"
+            for s in all_sources[:25]
+        )
+        strategy_input = f"""Based on this gap analysis, generate specific, evidence-backed strategic plays.
 
 COMPANY PROFILE:
 {company_profile}
@@ -301,9 +393,26 @@ GAP ANALYSIS:
 {gap_analysis}
 
 COMPETITIVE CONTEXT:
-Competitors analyzed: {', '.join(competitor_names)}"""
+Competitors analyzed: {', '.join(competitor_names)}
+
+AVAILABLE SOURCE URLS (cite these in evidence_url / sources):
+{sources_context}
+
+Give 3+ specific engineering/marketing plays using a named framework. No generic advice."""
 
         strategy = _call_agent(STRATEGY_ADVISOR_INSTRUCTION, strategy_input)
+
+        # --- Persist to memory for temporal intelligence ---
+        company_name, industry = _extract_name_industry(company_profile)
+        previous = get_previous_analysis(company_url=company_name or "unknown")
+        save_analysis(
+            company_url=company_name or "unknown",
+            company_name=company_name,
+            industry=industry,
+            competitors=competitor_names,
+            strategy=strategy,
+            gap_analysis=gap_analysis,
+        )
 
         return {
             "session_id": session_id,
@@ -311,6 +420,8 @@ Competitors analyzed: {', '.join(competitor_names)}"""
             "competitor_analysis": competitor_analysis,
             "gap_analysis": gap_analysis,
             "strategy": strategy,
+            "sources": all_sources,
+            "previous_analysis": previous,
             "success": True,
         }
 

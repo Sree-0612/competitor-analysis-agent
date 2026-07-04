@@ -12,7 +12,13 @@ Run standalone: python -m mcp_server.server
 from fastmcp import FastMCP
 
 from tools.scraper import scrape_website
-from tools.search import search_competitors, search_company_details, search_industry_trends
+from tools.search import (
+    search_competitors,
+    search_company_details,
+    search_industry_trends,
+    search_social_sentiment,
+)
+from tools.memory import get_previous_analysis, list_recent_analyses
 from tools.security import validate_url
 
 
@@ -87,6 +93,40 @@ def get_industry_trends(industry: str) -> dict:
         Current trends, emerging technologies, and market dynamics
     """
     return search_industry_trends(industry)
+
+
+@mcp.tool()
+def get_customer_sentiment(company_name: str) -> dict:
+    """
+    Mine 'alternative data' — what real customers say about a company on
+    Reddit, G2, and Trustpilot. Surfaces the unfiltered truth (complaints
+    and praise) that official websites hide.
+
+    Args:
+        company_name: Name of the company to research sentiment for
+
+    Returns:
+        Sentiment snippets with their source URLs and platform labels
+    """
+    return search_social_sentiment(company_name)
+
+
+@mcp.tool()
+def get_temporal_intelligence(company_name: str) -> dict:
+    """
+    Retrieve the most recent PRIOR analysis for a company, enabling
+    temporal reasoning ("what has changed since my last run?").
+
+    Args:
+        company_name: Name of the company to look up in memory
+
+    Returns:
+        The previous analysis if one exists, plus a list of recent analyses
+    """
+    return {
+        "previous_analysis": get_previous_analysis(company_name),
+        "recent_analyses": list_recent_analyses(limit=10),
+    }
 
 
 @mcp.resource("compete-iq://about")

@@ -24,3 +24,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Local analysis memory (runtime-generated)
+competeiq_memory.db
