@@ -16,7 +16,6 @@ and tool access, following the multi-agent pattern from Google ADK.
 """
 
 import json
-import asyncio
 from typing import Optional
 
 from google import genai
@@ -141,10 +140,11 @@ def _get_client() -> genai.Client:
     return genai.Client(api_key=GOOGLE_API_KEY)
 
 
-async def _call_agent(instruction: str, user_message: str) -> str:
+def _call_agent(instruction: str, user_message: str) -> str:
     """
     Call a single agent (Gemini with system instruction).
     Each call represents one specialized agent in the pipeline.
+    Synchronous to avoid event loop conflicts with Streamlit.
     """
     client = _get_client()
     response = client.models.generate_content(
@@ -162,7 +162,7 @@ async def _call_agent(instruction: str, user_message: str) -> str:
 # PHASE 1: DISCOVERY PIPELINE
 # ============================================================
 
-async def run_discovery_phase(url: str, session_id: str = "default") -> dict:
+def run_discovery_phase(url: str, session_id: str = "default") -> dict:
     """
     Run Phase 1: Company profiling + competitor discovery.
     Agents: CompanyProfiler → CompetitorFinder
@@ -171,7 +171,7 @@ async def run_discovery_phase(url: str, session_id: str = "default") -> dict:
     try:
         # --- Agent 1: Company Profiler ---
         # Tool: scrape_website
-        scraped_data = await scrape_website(url)
+        scraped_data = scrape_website(url)
 
         profiler_input = f"""Analyze this company website data and create a structured profile.
 
@@ -183,7 +183,7 @@ Headings: {json.dumps(scraped_data.get('headings', [])[:15])}
 Key Links: {json.dumps(scraped_data.get('key_links', [])[:10])}
 Content Preview: {scraped_data.get('main_content', 'N/A')[:1500]}"""
 
-        company_profile = await _call_agent(COMPANY_PROFILER_INSTRUCTION, profiler_input)
+        company_profile = _call_agent(COMPANY_PROFILER_INSTRUCTION, profiler_input)
 
         # --- Agent 2: Competitor Finder ---
         # Tool: search_competitors
@@ -206,7 +206,7 @@ COMPANY PROFILE:
 SEARCH RESULTS:
 {json.dumps(search_results, indent=2)[:3000]}"""
 
-        competitors_output = await _call_agent(COMPETITOR_FINDER_INSTRUCTION, finder_input)
+        competitors_output = _call_agent(COMPETITOR_FINDER_INSTRUCTION, finder_input)
 
         # Combine Phase 1 outputs
         combined_output = f"""COMPANY PROFILE:
@@ -237,7 +237,7 @@ COMPETITORS DISCOVERED:
 # PHASE 2: ANALYSIS PIPELINE
 # ============================================================
 
-async def run_analysis_phase(
+def run_analysis_phase(
     company_profile: str,
     competitors: str,
     session_id: str = "default",
@@ -277,7 +277,7 @@ COMPETITOR SEARCH RESULTS:
 
 Competitors to analyze: {', '.join(competitor_names)}"""
 
-        competitor_analysis = await _call_agent(COMPETITOR_ANALYST_INSTRUCTION, analyst_input)
+        competitor_analysis = _call_agent(COMPETITOR_ANALYST_INSTRUCTION, analyst_input)
 
         # --- Agent 4: Gap Analyst ---
         gap_input = f"""Compare the target company against these competitor profiles and identify gaps.
@@ -288,7 +288,7 @@ TARGET COMPANY:
 COMPETITOR PROFILES:
 {competitor_analysis}"""
 
-        gap_analysis = await _call_agent(GAP_ANALYST_INSTRUCTION, gap_input)
+        gap_analysis = _call_agent(GAP_ANALYST_INSTRUCTION, gap_input)
 
         # --- Agent 5: Strategy Advisor ---
         strategy_input = f"""Based on this gap analysis, generate strategic recommendations.
@@ -302,7 +302,7 @@ GAP ANALYSIS:
 COMPETITIVE CONTEXT:
 Competitors analyzed: {', '.join(competitor_names)}"""
 
-        strategy = await _call_agent(STRATEGY_ADVISOR_INSTRUCTION, strategy_input)
+        strategy = _call_agent(STRATEGY_ADVISOR_INSTRUCTION, strategy_input)
 
         return {
             "session_id": session_id,
@@ -325,18 +325,18 @@ Competitors analyzed: {', '.join(competitor_names)}"""
 # FULL PIPELINE (CLI mode, no HITL)
 # ============================================================
 
-async def run_full_pipeline(url: str) -> dict:
+def run_full_pipeline(url: str) -> dict:
     """
     Run the complete pipeline without HITL (used in CLI mode).
     Executes all 5 agents sequentially.
     """
     # Phase 1
-    discovery = await run_discovery_phase(url)
+    discovery = run_discovery_phase(url)
     if not discovery["success"]:
         return {"success": False, "output": discovery["raw_output"]}
 
     # Phase 2 (auto-confirm all competitors)
-    analysis = await run_analysis_phase(
+    analysis = run_analysis_phase(
         company_profile=discovery.get("company_profile", ""),
         competitors=discovery.get("competitors", ""),
     )

@@ -24,7 +24,7 @@ mcp = FastMCP(
 
 
 @mcp.tool()
-async def analyze_company_website(url: str) -> dict:
+def analyze_company_website(url: str) -> dict:
     """
     Scrape and analyze a company website to extract business intelligence.
     
@@ -39,7 +39,7 @@ async def analyze_company_website(url: str) -> dict:
     if not is_valid:
         return {"error": message}
 
-    result = await scrape_website(url)
+    result = scrape_website(url)
     return result
 
 

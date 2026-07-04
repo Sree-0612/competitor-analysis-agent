@@ -1,7 +1,7 @@
 """
 CompeteIQ - Web Scraping Tool
 Extracts structured information from company websites.
-Uses httpx for async HTTP + BeautifulSoup for HTML parsing.
+Uses httpx (sync) + BeautifulSoup for HTML parsing.
 """
 
 import httpx
@@ -11,7 +11,7 @@ from typing import Optional
 from config.settings import REQUEST_TIMEOUT
 
 
-async def scrape_website(url: str) -> dict:
+def scrape_website(url: str) -> dict:
     """
     Scrape a website and extract key business information.
     
@@ -29,17 +29,17 @@ async def scrape_website(url: str) -> dict:
     """
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (compatible; CompeteIQ/1.0; Research Bot)",
-            "Accept": "text/html,application/xhtml+xml",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
         }
 
-        async with httpx.AsyncClient(
+        with httpx.Client(
             timeout=REQUEST_TIMEOUT,
             follow_redirects=True,
-            max_redirects=5,
+            max_redirects=10,
         ) as client:
-            response = await client.get(url, headers=headers)
+            response = client.get(url, headers=headers)
             response.raise_for_status()
 
         soup = BeautifulSoup(response.text, "lxml")

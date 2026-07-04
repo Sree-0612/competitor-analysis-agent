@@ -9,7 +9,6 @@ Usage:
     python cli.py profile --url "https://www.tesla.com"
 """
 
-import asyncio
 import json
 
 import typer
@@ -56,7 +55,7 @@ def analyze(
         task = progress.add_task("Running full analysis pipeline...", total=None)
 
         from agents.orchestrator import run_full_pipeline
-        result = asyncio.run(run_full_pipeline(url))
+        result = run_full_pipeline(url)
 
         progress.update(task, description="✅ Analysis complete!")
 
@@ -107,7 +106,7 @@ def profile(
 
     console.print(f"[blue]🏢 Profiling: {url}[/blue]")
 
-    result = asyncio.run(scrape_website(url))
+    result = scrape_website(url)
 
     if result["success"]:
         table = Table(title=f"Company Profile: {result.get('title', 'Unknown')}")

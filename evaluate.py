@@ -6,7 +6,6 @@ Demonstrates production-quality testing approach.
 Run: python evaluate.py
 """
 
-import asyncio
 import json
 import time
 from typing import Any
@@ -100,12 +99,12 @@ def run_rate_limit_tests() -> list[dict]:
     return results
 
 
-async def run_scraper_tests() -> list[dict]:
+def run_scraper_tests() -> list[dict]:
     """Run web scraper tests."""
     results = []
     for url, expected_field, description in SCRAPER_TEST_CASES:
         try:
-            result = await scrape_website(url)
+            result = scrape_website(url)
             if expected_field == "error":
                 # We expect failure
                 passed = not result.get("success", True)
@@ -176,7 +175,7 @@ def main():
     # --- Scraper Tests ---
     print("🌐  WEB SCRAPER TESTS")
     print("-" * 60)
-    scraper_results = asyncio.run(run_scraper_tests())
+    scraper_results = run_scraper_tests()
     all_results.extend(scraper_results)
 
     table_data = [[r["test"], r["input"][:30], r["expected"], r["actual"], r["status"]]

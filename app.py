@@ -9,7 +9,6 @@ This is a clean, professional UI that demonstrates:
 - Security features (URL validation, rate limiting)
 """
 
-import asyncio
 import json
 import time
 from datetime import datetime
@@ -213,8 +212,8 @@ elif st.session_state.phase == "discovery":
                 st.write(f"Scraping: {url}")
                 st.write("Extracting: name, industry, products, features...")
 
-                # Run discovery phase
-                result = asyncio.run(run_discovery_phase(url))
+                # Run discovery phase (synchronous)
+                result = run_discovery_phase(url)
 
                 if result["success"]:
                     status1.update(label="🏢 Agent 1: Company profiled ✅", state="complete")
@@ -318,11 +317,11 @@ elif st.session_state.phase == "analysis":
         st.write(f"Researching: {', '.join(competitors)}")
         st.write("Extracting products, features, pricing, USPs...")
 
-        # Run analysis phase
-        result = asyncio.run(run_analysis_phase(
+        # Run analysis phase (synchronous)
+        result = run_analysis_phase(
             company_profile=company_profile,
             competitors=json.dumps(competitors),
-        ))
+        )
 
         s3.update(label="📊 Agent 3: Competitor analysis complete ✅", state="complete")
 
