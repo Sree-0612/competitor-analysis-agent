@@ -226,9 +226,10 @@ COMPETITORS DISCOVERED:
         }
 
     except Exception as e:
+        import traceback
         return {
             "session_id": session_id,
-            "raw_output": f"Discovery phase error: {str(e)}",
+            "raw_output": f"Discovery phase error: {type(e).__name__}: {str(e)}\n\n{traceback.format_exc()}",
             "success": False,
         }
 
@@ -314,9 +315,10 @@ Competitors analyzed: {', '.join(competitor_names)}"""
         }
 
     except Exception as e:
+        import traceback
         return {
             "session_id": session_id,
-            "raw_output": f"Analysis phase error: {str(e)}",
+            "raw_output": f"Analysis phase error: {type(e).__name__}: {str(e)}\n\n{traceback.format_exc()}",
             "success": False,
         }
 

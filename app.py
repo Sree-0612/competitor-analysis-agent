@@ -238,7 +238,14 @@ elif st.session_state.phase == "discovery":
         st.session_state.phase = "hitl"
         st.rerun()
     else:
-        st.error("Discovery phase failed. Please try again or check your API keys.")
+        st.error("Discovery phase failed. See the error details below:")
+        st.code(result.get("raw_output", "No error details available."), language="text")
+        st.info(
+            "**Common fixes:**\n"
+            "- Ensure `GOOGLE_API_KEY` and `TAVILY_API_KEY` are set in Streamlit secrets\n"
+            "- Verify your Google API key is valid at https://aistudio.google.com/apikey\n"
+            "- Try a different, simpler company URL"
+        )
         if st.button("🔄 Retry"):
             st.session_state.phase = "input"
             st.rerun()
@@ -345,7 +352,8 @@ elif st.session_state.phase == "analysis":
         st.session_state.phase = "results"
         st.rerun()
     else:
-        st.error("Analysis failed. Please try again.")
+        st.error("Analysis failed. See the error details below:")
+        st.code(result.get("raw_output", "No error details available."), language="text")
         if st.button("🔄 Retry"):
             st.session_state.phase = "hitl"
             st.rerun()
