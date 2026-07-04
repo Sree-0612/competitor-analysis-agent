@@ -1,0 +1,3 @@
+"""
+CompeteIQ - MCP Server Package
+"""

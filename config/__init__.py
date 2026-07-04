@@ -1,0 +1,1 @@
+"""CompeteIQ - Configuration Package"""
