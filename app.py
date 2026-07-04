@@ -86,8 +86,7 @@ if "analysis_history" not in st.session_state:
 
 # --- Sidebar ---
 with st.sidebar:
-    st.image("https://img.icons8.com/fluency/96/target.png", width=60)
-    st.markdown(f"### {APP_NAME}")
+    st.markdown(f"## 🎯 {APP_NAME}")
     st.markdown(f"*v{APP_VERSION}*")
     st.divider()
 
@@ -598,7 +597,7 @@ elif st.session_state.phase == "results":
             texttemplate="%{text}",
             textfont=dict(size=14, color="black"),
             showscale=True,
-            colorbar=dict(title="Score", titleside="right"),
+            colorbar=dict(title=dict(text="Score", side="right")),
         ))
         fig_heatmap.update_layout(
             height=300,
