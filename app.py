@@ -23,78 +23,165 @@ from agents.orchestrator import run_discovery_phase, run_analysis_phase
 from tools.memory import list_recent_analyses
 
 
-def build_pdf_report(target: str, competitors: list, parsed: dict, fallback_text: str) -> bytes:
+def build_pdf_report(target: str, competitors: list, parsed: dict, fallback_text: str,
+                     gap_data: dict = None, comp_data: dict = None,
+                     sources: list = None) -> bytes:
     """
-    Build a clean executive-summary PDF from the analysis results.
+    Build a COMPLETE multi-page PDF covering ALL tabs of the report.
     Uses fpdf2 (pure Python, no system dependencies).
     """
     from fpdf import FPDF
 
     def clean(text: str) -> str:
-        # fpdf2 core fonts are latin-1; strip unsupported chars
         return str(text).encode("latin-1", "replace").decode("latin-1")
 
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
-    # Header
-    pdf.set_font("Helvetica", "B", 20)
+    # --- Cover Header ---
+    pdf.set_font("Helvetica", "B", 22)
     pdf.set_text_color(26, 115, 232)
-    pdf.cell(0, 12, clean("CompeteIQ - Competitive Analysis Report"), ln=True)
-    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(0, 14, clean("CompeteIQ"), ln=True)
+    pdf.set_font("Helvetica", "", 12)
     pdf.set_text_color(100, 100, 100)
+    pdf.cell(0, 7, clean("AI-Powered Competitive Intelligence Report"), ln=True)
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "", 10)
     pdf.cell(0, 6, clean(f"Target: {target}"), ln=True)
     pdf.cell(0, 6, clean(f"Competitors: {', '.join(competitors)}"), ln=True)
     pdf.cell(0, 6, clean(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}"), ln=True)
+    pdf.ln(6)
+    pdf.set_draw_color(200, 200, 200)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
     pdf.ln(4)
 
     def section(title: str):
-        pdf.set_font("Helvetica", "B", 13)
+        pdf.set_font("Helvetica", "B", 14)
         pdf.set_text_color(30, 41, 59)
-        pdf.cell(0, 9, clean(title), ln=True)
-        pdf.set_font("Helvetica", "", 11)
+        pdf.cell(0, 10, clean(title), ln=True)
+        pdf.set_font("Helvetica", "", 10)
+        pdf.set_text_color(0, 0, 0)
+
+    def subsection(title: str):
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_text_color(50, 50, 50)
+        pdf.cell(0, 8, clean(title), ln=True)
+        pdf.set_font("Helvetica", "", 10)
         pdf.set_text_color(0, 0, 0)
 
     def body(text: str):
-        pdf.multi_cell(0, 6, clean(text))
+        pdf.multi_cell(0, 5, clean(str(text)[:500]))
         pdf.ln(1)
 
+    # ═══════════ TAB 1: EXECUTIVE SUMMARY ═══════════
+    section("1. Executive Summary")
     if parsed:
         if parsed.get("executive_summary"):
-            section("Executive Summary")
             body(parsed["executive_summary"])
         if parsed.get("aha_insight"):
-            section("The 'Aha' Insight")
+            subsection("The 'Aha' Insight")
             body(parsed["aha_insight"])
         if parsed.get("strategy_framework"):
-            section("Strategic Framework")
+            subsection("Strategic Framework")
             body(parsed["strategy_framework"])
-        if parsed.get("recommendations"):
-            section("Strategic Recommendations")
-            for i, rec in enumerate(parsed["recommendations"], 1):
-                pdf.set_font("Helvetica", "B", 11)
-                body(f"{i}. [{rec.get('priority', 'MEDIUM')}] {rec.get('title', 'Recommendation')}")
-                pdf.set_font("Helvetica", "", 11)
-                if rec.get("play"):
-                    body(f"   Play: {rec['play']}")
-                if rec.get("description"):
-                    body(f"   {rec['description']}")
-                if rec.get("timeline"):
-                    body(f"   Timeline: {rec['timeline']}")
-        if parsed.get("quick_wins"):
-            section("Quick Wins")
-            for qw in parsed["quick_wins"]:
-                body(f"- {qw}")
+        if parsed.get("competitive_moat"):
+            subsection("Competitive Moat")
+            body(parsed["competitive_moat"])
         if parsed.get("risk_if_no_action"):
-            section("Risk of Inaction")
+            subsection("Risk of Inaction")
             body(parsed["risk_if_no_action"])
     else:
-        section("Analysis Report")
-        body(fallback_text[:3000])
+        body(fallback_text[:2000])
+    pdf.ln(3)
+
+    # ═══════════ TAB 2: GAP ANALYSIS ═══════════
+    pdf.add_page()
+    section("2. Gap Analysis")
+
+    effective_gap = gap_data or parsed
+    if effective_gap and effective_gap.get("gaps"):
+        subsection("Competitive Gaps")
+        for i, gap in enumerate(effective_gap["gaps"], 1):
+            impact = gap.get("impact", "medium").upper()
+            body(f"[{impact}] Gap {i}: {gap.get('description', 'N/A')} "
+                 f"(from {gap.get('competitor', 'competitor')})")
+
+    if effective_gap and effective_gap.get("advantages"):
+        subsection("Your Advantages")
+        for adv in effective_gap["advantages"]:
+            body(f"+ {adv.get('description', 'N/A')}")
+
+    # Feature Matrix
+    if effective_gap and effective_gap.get("feature_matrix"):
+        fm = effective_gap["feature_matrix"]
+        features = fm.get("features", [])
+        companies = fm.get("companies", {})
+        if features and companies:
+            subsection("Feature Parity Matrix")
+            header = "Feature | " + " | ".join(companies.keys())
+            body(header)
+            body("-" * len(header))
+            for i, feat in enumerate(features):
+                row = f"{feat} | "
+                for comp, vals in companies.items():
+                    has_it = vals[i] if i < len(vals) else False
+                    row += ("YES" if has_it else "NO") + " | "
+                body(row)
+    pdf.ln(3)
+
+    # ═══════════ TAB 3: RECOMMENDATIONS ═══════════
+    pdf.add_page()
+    section("3. Strategic Recommendations")
+    if parsed and parsed.get("recommendations"):
+        for i, rec in enumerate(parsed["recommendations"], 1):
+            subsection(f"{i}. [{rec.get('priority', 'MEDIUM')}] {rec.get('title', 'Recommendation')}")
+            if rec.get("play"):
+                body(f"Play: {rec['play']}")
+            if rec.get("framework"):
+                body(f"Framework: {rec['framework']}")
+            if rec.get("description"):
+                body(rec["description"])
+            if rec.get("timeline"):
+                body(f"Timeline: {rec['timeline']}")
+            if rec.get("expected_impact"):
+                body(f"Expected Impact: {rec['expected_impact']}")
+            if rec.get("evidence_url") and rec["evidence_url"].startswith("http"):
+                body(f"Evidence: {rec['evidence_url']}")
+            pdf.ln(1)
+
+        if parsed.get("quick_wins"):
+            subsection("Quick Wins (This Week)")
+            for qw in parsed["quick_wins"]:
+                body(f"- {qw}")
+    pdf.ln(3)
+
+    # ═══════════ TAB 5: SOURCES ═══════════
+    pdf.add_page()
+    section("4. Sources & Citations")
+    if parsed and parsed.get("sources"):
+        subsection("Key Claims")
+        for s in parsed["sources"]:
+            url = s.get("url", "")
+            claim = s.get("claim", "")
+            body(f'"{claim}" - {url}')
+
+    if sources:
+        subsection("All Data Sources Consulted")
+        seen = set()
+        for s in sources:
+            url = s.get("url", "")
+            if url and url not in seen and url.startswith("http"):
+                seen.add(url)
+                body(f"[{s.get('platform', 'Web')}] {s.get('title', '')[:60]} - {url}")
+
+    # Footer on every page
+    pdf.set_y(-15)
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.set_text_color(150, 150, 150)
+    pdf.cell(0, 5, clean("Generated by CompeteIQ - AI-Powered Competitive Intelligence | Kaggle Capstone 2026"), align="C")
 
     out = pdf.output(dest="S")
-    # fpdf2 returns bytearray/str depending on version; normalize to bytes
     if isinstance(out, (bytes, bytearray)):
         return bytes(out)
     return out.encode("latin-1")
@@ -162,71 +249,68 @@ if "analysis_history" not in st.session_state:
     st.session_state.analysis_history = []
 
 
-# --- Sidebar ---
+# --- Sidebar (Command Center) ---
 with st.sidebar:
     st.markdown(f"## 🎯 {APP_NAME}")
-    st.markdown(f"*v{APP_VERSION}*")
+    st.markdown(f"*v{APP_VERSION} — AI Competitive Intelligence*")
     st.divider()
 
-    st.markdown("#### 🏗️ Architecture")
+    # System Status (green/red dots)
+    st.markdown("#### System Status")
+    col_s1, col_s2 = st.columns(2)
+    with col_s1:
+        if GOOGLE_API_KEY:
+            st.markdown("🟢 Gemini API")
+        else:
+            st.markdown("🔴 Gemini API")
+    with col_s2:
+        if TAVILY_API_KEY:
+            st.markdown("🟢 Tavily Search")
+        else:
+            st.markdown("🔴 Tavily Search")
+    st.markdown("🟢 Jina Reader")
+
+    st.divider()
+
+    # Pipeline
+    st.markdown("#### 🏗️ Pipeline")
     st.markdown("""
-    **5 AI Agents** orchestrated sequentially:
     1. 🏢 Company Profiler
     2. 🔍 Competitor Finder
-    3. � **Human-in-the-Loop Gate**
+    3. 🙋 **HITL Gate**
     4. 📊 Competitor Analyst
     5. 🔬 Gap Analyst
     6. 💡 Strategy Advisor
     """)
 
     st.divider()
-    st.markdown("#### ⚡ Capabilities")
-    st.markdown("""
-    - 🧠 Jina Reader (anti-bot scraping)
-    - 🗣️ Reddit/G2/Trustpilot sentiment
-    - 🔗 Source-grounded citations
-    - 📈 Executive dashboard (Plotly)
-    - 🕐 Temporal memory (SQLite)
-    - 📄 PDF export
-    """)
 
-    st.divider()
-    st.markdown("#### 🛡️ Security")
-    st.markdown("""
-    - ✅ URL validation & SSRF prevention
-    - ✅ Rate limiting (5/session)
-    - ✅ Output sanitization
-    - ✅ No API keys in code
-    """)
-
-    st.divider()
-    st.markdown("#### 📊 Session Stats")
-    analyses_done = len(st.session_state.analysis_history)
-    st.metric("Analyses This Session", analyses_done)
-
-    # Temporal memory — past analyses across sessions
+    # Temporal memory
     recent = list_recent_analyses(limit=5)
     if recent:
-        st.markdown("#### 🧠 Analysis Memory")
-        st.caption("Past runs (temporal intelligence)")
+        st.markdown("#### 🧠 Analysis History")
+        st.caption("Temporal intelligence — past runs")
         for r in recent:
             try:
                 ts = datetime.fromisoformat(r["created_at"]).strftime("%b %d, %H:%M")
             except (ValueError, TypeError):
                 ts = ""
             st.markdown(f"- **{r.get('company_name') or 'Unknown'}** · {ts}")
+        st.divider()
 
-    # API key status
-    if GOOGLE_API_KEY and TAVILY_API_KEY:
-        st.success("🔑 API Keys configured")
-    else:
-        st.error("⚠️ Missing API keys - check secrets")
+    # Session stats
+    analyses_done = len(st.session_state.analysis_history)
+    st.metric("Analyses This Session", analyses_done)
+
+    # Agent Logs toggle
+    st.divider()
+    show_logs = st.checkbox("🖥️ Show Agent Logs", value=False,
+                            help="Display raw agent output for debugging")
+    st.session_state["show_agent_logs"] = show_logs
 
     st.divider()
-    st.markdown(
-        "Built with [Google ADK](https://google.github.io/adk-docs/) + "
-        "[Gemini 2.5 Flash](https://ai.google.dev/)"
-    )
+    st.caption("Built with Google GenAI + Gemini 2.5 Flash")
+
 
 
 # --- Main Content ---
@@ -270,6 +354,9 @@ if st.session_state.phase == "input":
             if st.button(label, use_container_width=True):
                 url_input = ex_url
                 analyze_btn = True
+
+    # Security note
+    st.caption("🛡️ Your URL is validated for SSRF/XSS, never stored externally, and all outputs are sanitized.")
 
     if analyze_btn and url_input:
         # Security: Validate URL
@@ -362,46 +449,64 @@ elif st.session_state.phase == "hitl":
         "before proceeding with deep analysis."
     )
 
-    st.info("💡 **Human-in-the-Loop**: You control which competitors get analyzed. "
-            "This prevents wasted computation and ensures relevance.")
+    st.info("💡 **Human-in-the-Loop Gate**: You control which competitors get analyzed. "
+            "This prevents wasted computation and ensures relevance. "
+            "Add rows for niche rivals the AI may have missed.")
 
-    # Show discovery results
-    with st.expander("📋 Raw Discovery Output", expanded=True):
+    # Show discovery results (collapsible)
+    with st.expander("📋 Discovery Output", expanded=False):
         st.markdown(sanitize_output(st.session_state.discovery_output))
 
-    # Editable competitor list
-    st.markdown("#### ✏️ Edit Competitor List")
-    st.markdown("Add or remove competitors below (one per line):")
+    # Parse competitor names into a DataFrame for st.data_editor
+    import pandas as pd
 
-    # Try to extract competitor names from output
-    default_competitors = "Competitor 1\nCompetitor 2\nCompetitor 3"
+    default_competitors = []
     try:
-        # Attempt to parse JSON from competitors output
         comp_output = st.session_state.get("competitors_raw", st.session_state.discovery_output)
-        # Find JSON in the output
         if "{" in comp_output:
             json_str = comp_output[comp_output.index("{"):comp_output.rindex("}") + 1]
             parsed = json.loads(json_str)
             if "competitors" in parsed:
-                names = [c.get("name", "") for c in parsed["competitors"] if c.get("name")]
-                if names:
-                    default_competitors = "\n".join(names)
+                for c in parsed["competitors"]:
+                    if c.get("name"):
+                        default_competitors.append({
+                            "Include": True,
+                            "Competitor": c["name"],
+                            "Reason": c.get("reason", "Direct competitor"),
+                        })
     except (json.JSONDecodeError, ValueError, KeyError, TypeError):
         pass
 
-    competitors_text = st.text_area(
-        "Competitors",
-        value=default_competitors,
-        height=150,
-        label_visibility="collapsed",
+    if not default_competitors:
+        default_competitors = [
+            {"Include": True, "Competitor": "Competitor 1", "Reason": "Direct competitor"},
+            {"Include": True, "Competitor": "Competitor 2", "Reason": "Direct competitor"},
+            {"Include": True, "Competitor": "Competitor 3", "Reason": "Direct competitor"},
+        ]
+
+    st.markdown("#### ✏️ Confirm Competitive Landscape")
+    st.caption("Toggle include/exclude, edit names, or add new rows")
+
+    df_competitors = pd.DataFrame(default_competitors)
+    edited_df = st.data_editor(
+        df_competitors,
+        num_rows="dynamic",
+        use_container_width=True,
+        column_config={
+            "Include": st.column_config.CheckboxColumn("Include", default=True),
+            "Competitor": st.column_config.TextColumn("Competitor Name", width="medium"),
+            "Reason": st.column_config.TextColumn("Why a Competitor", width="large"),
+        },
     )
 
     col1, col2, col3 = st.columns([1, 1, 2])
     with col1:
-        if st.button("✅ Confirm & Analyze", type="primary"):
-            competitors_list = [c.strip() for c in competitors_text.split("\n") if c.strip()]
+        if st.button("🚀 Start Deep Analysis", type="primary"):
+            # Get only checked competitors
+            selected = edited_df[edited_df["Include"] == True]["Competitor"].tolist()
+            competitors_list = [c.strip() for c in selected if c.strip()]
             if not competitors_list:
-                st.error("Please enter at least one competitor.")
+                st.error("Please include at least one competitor.")
             else:
                 st.session_state.confirmed_competitors = competitors_list
                 st.session_state.phase = "analysis"
@@ -515,6 +620,34 @@ elif st.session_state.phase == "results":
             parsed_result = json.loads(json_str)
     except (json.JSONDecodeError, ValueError):
         pass
+
+    # --- KPI Metric Cards (SaaS Dashboard style) ---
+    n_gaps = len(parsed_result.get("gaps", [])) if parsed_result else 0
+    n_advantages = len(parsed_result.get("advantages", [])) if parsed_result else 0
+    n_recs = len(parsed_result.get("recommendations", [])) if parsed_result else 0
+
+    # Determine market position label
+    if n_advantages > n_gaps + 1:
+        position_label = "Leader"
+    elif n_advantages > n_gaps:
+        position_label = "Strong"
+    elif n_advantages == n_gaps:
+        position_label = "Challenger"
+    else:
+        position_label = "Vulnerable"
+
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    with kpi1:
+        st.metric("Market Position", position_label)
+    with kpi2:
+        st.metric("Gaps Found", n_gaps, delta=f"-{n_gaps}" if n_gaps > 0 else None,
+                  delta_color="inverse")
+    with kpi3:
+        st.metric("Advantages", n_advantages, delta=f"+{n_advantages}" if n_advantages > 0 else None)
+    with kpi4:
+        st.metric("Action Items", n_recs)
+
+    st.markdown("")
 
     # --- Results Tabs ---
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -1114,24 +1247,53 @@ elif st.session_state.phase == "results":
             st.session_state.analysis_result = None
             st.rerun()
     with col2:
-        # Download as JSON
+        # Download COMPLETE JSON (all tabs data)
+        full_json = {
+            "metadata": {
+                "target": st.session_state.target_url,
+                "competitors": st.session_state.confirmed_competitors,
+                "generated": datetime.now().isoformat(),
+                "tool": "CompeteIQ v1.0.0",
+            },
+            "executive_summary": {
+                "summary": parsed_result.get("executive_summary", "") if parsed_result else "",
+                "aha_insight": parsed_result.get("aha_insight", "") if parsed_result else "",
+                "strategy_framework": parsed_result.get("strategy_framework", "") if parsed_result else "",
+                "competitive_moat": parsed_result.get("competitive_moat", "") if parsed_result else "",
+                "risk_if_no_action": parsed_result.get("risk_if_no_action", "") if parsed_result else "",
+            },
+            "gap_analysis": gap_data or (parsed_result if parsed_result else {}),
+            "recommendations": parsed_result.get("recommendations", []) if parsed_result else [],
+            "quick_wins": parsed_result.get("quick_wins", []) if parsed_result else [],
+            "sources": {
+                "key_claims": parsed_result.get("sources", []) if parsed_result else [],
+                "all_sources": st.session_state.get("analysis_sources", []),
+            },
+            "raw_outputs": {
+                "strategy": st.session_state.get("analysis_result", ""),
+                "competitor_analysis": st.session_state.get("competitor_analysis", ""),
+                "gap_analysis_raw": st.session_state.get("gap_analysis", ""),
+            },
+        }
         st.download_button(
-            "📥 JSON",
-            data=json.dumps(parsed_result or {"report": sanitized_result}, indent=2),
+            "📥 Full JSON",
+            data=json.dumps(full_json, indent=2, default=str),
             file_name=f"competeiq_report_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
             mime="application/json",
         )
     with col3:
-        # Download as PDF (executive summary)
+        # Download COMPLETE PDF (all tabs)
         try:
             pdf_bytes = build_pdf_report(
                 target=st.session_state.target_url,
                 competitors=st.session_state.confirmed_competitors,
                 parsed=parsed_result,
                 fallback_text=sanitized_result,
+                gap_data=gap_data,
+                sources=st.session_state.get("analysis_sources", []),
             )
             st.download_button(
-                "📄 PDF",
+                "📄 Full PDF",
                 data=pdf_bytes,
                 file_name=f"competeiq_report_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
                 mime="application/pdf",
@@ -1140,6 +1302,18 @@ elif st.session_state.phase == "results":
             st.caption("PDF unavailable")
     with col4:
         st.markdown(f"*Done at {datetime.now().strftime('%H:%M:%S')}*")
+
+    # Agent Logs (togglable from sidebar)
+    if st.session_state.get("show_agent_logs"):
+        st.divider()
+        st.markdown("#### 🖥️ Agent Logs")
+        st.caption("Raw agent outputs — useful for debugging and demonstrating agent reasoning")
+        with st.expander("Agent 3: Competitor Analyst Output", expanded=False):
+            st.code(st.session_state.get("competitor_analysis", "N/A")[:3000], language="json")
+        with st.expander("Agent 4: Gap Analyst Output", expanded=False):
+            st.code(st.session_state.get("gap_analysis", "N/A")[:3000], language="json")
+        with st.expander("Agent 5: Strategy Advisor Output", expanded=False):
+            st.code(st.session_state.get("analysis_result", "N/A")[:3000], language="json")
 
 
 # --- Footer ---
