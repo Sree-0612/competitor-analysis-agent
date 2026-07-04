@@ -194,22 +194,49 @@ def _get_client() -> genai.Client:
     return genai.Client(api_key=GOOGLE_API_KEY)
 
 
-def _call_agent(instruction: str, user_message: str) -> str:
+def _call_agent(instruction: str, user_message: str, max_retries: int = 3) -> str:
     """
     Call a single agent (Gemini with system instruction).
     Each call represents one specialized agent in the pipeline.
     Synchronous to avoid event loop conflicts with Streamlit.
+
+    Includes automatic retry with exponential backoff for rate limits (429).
     """
+    import time as _time
+    from google.genai.errors import ClientError
+
     client = _get_client()
-    response = client.models.generate_content(
-        model=MODEL_NAME,
-        contents=user_message,
-        config=types.GenerateContentConfig(
-            system_instruction=instruction,
-            temperature=0.3,  # Low temp for factual, consistent output
-        ),
-    )
-    return response.text or ""
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model=MODEL_NAME,
+                contents=user_message,
+                config=types.GenerateContentConfig(
+                    system_instruction=instruction,
+                    temperature=0.3,
+                ),
+            )
+            return response.text or ""
+        except ClientError as e:
+            last_error = e
+            error_str = str(e)
+            if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                # Check if it's a DAILY limit (no point retrying today)
+                if "PerDay" in error_str:
+                    raise RuntimeError(
+                        f"Daily free-tier quota exhausted (20 requests/day for {MODEL_NAME}). "
+                        f"Your quota resets at midnight Pacific Time. "
+                        f"Try again tomorrow, or create a new API key on a different Google Cloud project."
+                    ) from e
+                # Per-minute rate limit — retry with backoff
+                wait = (2 ** attempt) * 15  # 15s, 30s, 60s
+                _time.sleep(wait)
+            else:
+                raise
+
+    raise last_error or RuntimeError("Agent call failed after retries.")
 
 
 def _extract_name_industry(company_profile: str) -> tuple[str, str]:
