@@ -26,7 +26,7 @@ GOOGLE_API_KEY = _get_secret("GOOGLE_API_KEY")
 TAVILY_API_KEY = _get_secret("TAVILY_API_KEY")
 
 # --- Agent Configuration ---
-MODEL_NAME = "gemini-2.0-flash"
+MODEL_NAME = "gemini-2.5-flash"
 MAX_COMPETITORS = 4
 MAX_SEARCH_RESULTS = 10
 REQUEST_TIMEOUT = 30
