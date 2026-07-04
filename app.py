@@ -232,9 +232,10 @@ elif st.session_state.phase == "discovery":
                     status2.update(label="🔍 Agent 2: Failed ❌", state="error")
 
     if result["success"]:
-        # Parse the output to extract structured data
-        raw_output = result["raw_output"]
-        st.session_state.discovery_output = raw_output
+        # Store structured outputs from discovery phase
+        st.session_state.discovery_output = result["raw_output"]
+        st.session_state.company_profile = result.get("company_profile", "")
+        st.session_state.competitors_raw = result.get("competitors", "")
         st.session_state.phase = "hitl"
         st.rerun()
     else:
@@ -266,16 +267,17 @@ elif st.session_state.phase == "hitl":
     # Try to extract competitor names from output
     default_competitors = "Competitor 1\nCompetitor 2\nCompetitor 3"
     try:
-        # Attempt to parse JSON from output
-        output = st.session_state.discovery_output
-        if "{" in output:
-            json_str = output[output.index("{"):output.rindex("}") + 1]
+        # Attempt to parse JSON from competitors output
+        comp_output = st.session_state.get("competitors_raw", st.session_state.discovery_output)
+        # Find JSON in the output
+        if "{" in comp_output:
+            json_str = comp_output[comp_output.index("{"):comp_output.rindex("}") + 1]
             parsed = json.loads(json_str)
             if "competitors" in parsed:
                 names = [c.get("name", "") for c in parsed["competitors"] if c.get("name")]
                 if names:
                     default_competitors = "\n".join(names)
-    except (json.JSONDecodeError, ValueError, KeyError):
+    except (json.JSONDecodeError, ValueError, KeyError, TypeError):
         pass
 
     competitors_text = st.text_area(
@@ -306,7 +308,7 @@ elif st.session_state.phase == "analysis":
     st.markdown("### 🔬 Running Deep Analysis Pipeline")
 
     competitors = st.session_state.confirmed_competitors
-    discovery_output = st.session_state.discovery_output
+    company_profile = st.session_state.get("company_profile", st.session_state.discovery_output)
 
     # Show which competitors are being analyzed
     st.markdown(f"**Analyzing {len(competitors)} competitors:** {', '.join(competitors)}")
@@ -318,7 +320,7 @@ elif st.session_state.phase == "analysis":
 
         # Run analysis phase
         result = asyncio.run(run_analysis_phase(
-            company_profile=discovery_output,
+            company_profile=company_profile,
             competitors=json.dumps(competitors),
         ))
 

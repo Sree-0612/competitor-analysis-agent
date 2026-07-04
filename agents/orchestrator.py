@@ -1,113 +1,241 @@
 """
 CompeteIQ - Agent Orchestrator
-Root orchestrator that coordinates all 5 agents in a sequential pipeline.
-Uses Google ADK's SequentialAgent for deterministic, auditable execution.
+Coordinates 5 specialized agents in a sequential pipeline using Google GenAI.
 
 Architecture:
-    RootOrchestrator (SequentialAgent)
+    RootOrchestrator (Sequential Pipeline)
     ├── Phase 1: CompanyProfiler → scrapes target URL
     ├── Phase 2: CompetitorFinder → discovers competitors via search
     ├── [HITL: User confirms competitor list]
     ├── Phase 3: CompetitorAnalyst → deep-dives each competitor
     ├── Phase 4: GapAnalyst → identifies strategic gaps
     └── Phase 5: StrategyAdvisor → generates action plan
+
+Each agent is a specialized Gemini call with distinct system instructions
+and tool access, following the multi-agent pattern from Google ADK.
 """
 
 import json
 import asyncio
 from typing import Optional
 
-from google.adk.agents import SequentialAgent
-from google.adk.sessions import InMemorySessionService
-from google.adk.runners import Runner
 from google import genai
+from google.genai import types
 
-from agents.company_profiler import company_profiler_agent
-from agents.competitor_finder import competitor_finder_agent
-from agents.competitor_analyst import competitor_analyst_agent
-from agents.gap_analyst import gap_analyst_agent
-from agents.strategy_advisor import strategy_advisor_agent
-from config.settings import GOOGLE_API_KEY, APP_NAME
+from tools.scraper import scrape_website
+from tools.search import search_competitors, search_company_details
+from config.settings import GOOGLE_API_KEY, MODEL_NAME, APP_NAME
 
 
-# --- Configure Google GenAI Client ---
-client = genai.Client(api_key=GOOGLE_API_KEY)
+# --- Agent System Instructions ---
+# Each agent has a focused role with specific expertise.
+
+COMPANY_PROFILER_INSTRUCTION = """You are a Business Intelligence Analyst specializing in company profiling.
+Given website data, produce a structured company profile.
+
+OUTPUT FORMAT (respond ONLY with this JSON, no other text):
+{
+    "name": "Company Name",
+    "url": "the URL",
+    "industry": "Primary industry/sector",
+    "sub_industry": "Specific niche",
+    "products": ["Product 1", "Product 2", "Product 3"],
+    "key_features": ["Feature 1", "Feature 2", "Feature 3"],
+    "usps": ["USP 1", "USP 2", "USP 3"],
+    "pricing_tier": "budget/mid-range/premium/luxury",
+    "target_audience": "Description of target customers",
+    "brand_positioning": "How they position themselves"
+}
+Be specific and factual. If data is limited, use your knowledge of the company."""
+
+COMPETITOR_FINDER_INSTRUCTION = """You are a Market Research Specialist focused on competitive landscape mapping.
+Given a company profile and search results about competitors, identify the top 4 direct competitors.
+
+OUTPUT FORMAT (respond ONLY with this JSON, no other text):
+{
+    "target_company": "Name",
+    "industry": "Industry",
+    "competitors": [
+        {"name": "Competitor 1", "url": "https://...", "reason": "Why direct competitor"},
+        {"name": "Competitor 2", "url": "https://...", "reason": "Why direct competitor"},
+        {"name": "Competitor 3", "url": "https://...", "reason": "Why direct competitor"},
+        {"name": "Competitor 4", "url": "https://...", "reason": "Why direct competitor"}
+    ],
+    "market_context": "Brief competitive landscape description"
+}
+Only include DIRECT competitors. Be factual."""
+
+COMPETITOR_ANALYST_INSTRUCTION = """You are a Competitive Intelligence Analyst performing deep competitor research.
+Given search results about competitors, compile detailed profiles for each.
+
+OUTPUT FORMAT (respond ONLY with this JSON, no other text):
+{
+    "competitor_profiles": [
+        {
+            "name": "Competitor Name",
+            "products": ["Product 1", "Product 2"],
+            "key_features": ["Feature 1", "Feature 2"],
+            "usps": ["Unique strength 1", "Unique strength 2"],
+            "pricing_tier": "budget/mid-range/premium/luxury",
+            "strengths": ["Strength 1", "Strength 2"],
+            "weaknesses": ["Weakness 1", "Weakness 2"],
+            "recent_launches": ["Latest product/initiative"],
+            "target_audience": "Who they serve"
+        }
+    ]
+}
+Be thorough and factual. Focus on current info (2024-2025)."""
+
+GAP_ANALYST_INSTRUCTION = """You are a Strategic Gap Analysis Expert.
+Compare the target company against competitors to identify gaps and advantages.
+
+OUTPUT FORMAT (respond ONLY with this JSON, no other text):
+{
+    "gaps": [
+        {
+            "description": "What competitor has that you don't",
+            "competitor": "Which competitor",
+            "impact": "high/medium/low",
+            "category": "product/pricing/technology/brand/customer/sustainability"
+        }
+    ],
+    "advantages": [
+        {
+            "description": "What you have that competitors lack",
+            "impact": "high/medium/low",
+            "category": "product/pricing/technology/brand/customer/sustainability"
+        }
+    ],
+    "parity_areas": ["Areas where roughly equal"],
+    "overall_position": "Brief competitive standing assessment",
+    "biggest_threat": "Single biggest competitive threat"
+}
+Be specific and actionable. Minimum 3 gaps and 2 advantages."""
+
+STRATEGY_ADVISOR_INSTRUCTION = """You are a Chief Strategy Officer providing competitive intelligence recommendations.
+Based on gap analysis, generate a prioritized strategic action plan.
+
+OUTPUT FORMAT (respond ONLY with this JSON, no other text):
+{
+    "executive_summary": "2-3 sentence overview of position and key action needed",
+    "recommendations": [
+        {
+            "priority": "HIGH/MEDIUM/LOW",
+            "title": "Short action title",
+            "description": "What to do and why",
+            "addresses_gap": "Which gap this fixes",
+            "timeline": "Quick Win (1-3 months) / Medium Term (3-6 months) / Long Term (6-12 months)",
+            "expected_impact": "What improvement to expect"
+        }
+    ],
+    "quick_wins": ["Immediate actions achievable this week"],
+    "competitive_moat": "Strongest advantage and how to protect it",
+    "risk_if_no_action": "What happens if gaps not addressed",
+    "industry_trend_alignment": "How recommendations align with industry direction"
+}
+Maximum 6 recommendations. At least 1 Quick Win. Be specific, not generic."""
 
 
-# --- Phase 1 Orchestrator: Discovery ---
-# Runs company profiling and competitor finding sequentially
-discovery_pipeline = SequentialAgent(
-    name="discovery_pipeline",
-    description="Phase 1: Discover company profile and potential competitors",
-    sub_agents=[company_profiler_agent, competitor_finder_agent],
-)
-
-# --- Phase 2 Orchestrator: Analysis ---
-# Runs deep analysis, gap identification, and strategy generation
-analysis_pipeline = SequentialAgent(
-    name="analysis_pipeline",
-    description="Phase 2: Analyze competitors, identify gaps, and generate strategy",
-    sub_agents=[competitor_analyst_agent, gap_analyst_agent, strategy_advisor_agent],
-)
-
-# --- Root Orchestrator ---
-# Full pipeline (used in CLI mode without HITL)
-# Uses the two sub-pipelines as children to avoid double-parenting agents.
-root_orchestrator = SequentialAgent(
-    name="compete_iq_orchestrator",
-    description="CompeteIQ: Full competitor analysis pipeline",
-    sub_agents=[discovery_pipeline, analysis_pipeline],
-)
+def _get_client() -> genai.Client:
+    """Get configured GenAI client."""
+    return genai.Client(api_key=GOOGLE_API_KEY)
 
 
-# --- Session Management ---
-session_service = InMemorySessionService()
+async def _call_agent(instruction: str, user_message: str) -> str:
+    """
+    Call a single agent (Gemini with system instruction).
+    Each call represents one specialized agent in the pipeline.
+    """
+    client = _get_client()
+    response = client.models.generate_content(
+        model=MODEL_NAME,
+        contents=user_message,
+        config=types.GenerateContentConfig(
+            system_instruction=instruction,
+            temperature=0.3,  # Low temp for factual, consistent output
+        ),
+    )
+    return response.text or ""
 
+
+# ============================================================
+# PHASE 1: DISCOVERY PIPELINE
+# ============================================================
 
 async def run_discovery_phase(url: str, session_id: str = "default") -> dict:
     """
     Run Phase 1: Company profiling + competitor discovery.
+    Agents: CompanyProfiler → CompetitorFinder
     Returns results for HITL confirmation before proceeding.
-    
-    Args:
-        url: Target company URL
-        session_id: Unique session identifier
-        
-    Returns:
-        Dictionary with company profile and discovered competitors
     """
-    runner = Runner(
-        agent=discovery_pipeline,
-        app_name=APP_NAME,
-        session_service=session_service,
-    )
+    try:
+        # --- Agent 1: Company Profiler ---
+        # Tool: scrape_website
+        scraped_data = await scrape_website(url)
 
-    # Create session with the URL as initial context
-    session = await session_service.create_session(
-        app_name=APP_NAME,
-        user_id=session_id,
-    )
+        profiler_input = f"""Analyze this company website data and create a structured profile.
 
-    # Send the URL as the user message to kick off the pipeline
-    user_message = f"Analyze this company website and find their competitors: {url}"
+URL: {url}
+SCRAPED DATA:
+Title: {scraped_data.get('title', 'N/A')}
+Description: {scraped_data.get('meta_description', 'N/A')}
+Headings: {json.dumps(scraped_data.get('headings', [])[:15])}
+Key Links: {json.dumps(scraped_data.get('key_links', [])[:10])}
+Content Preview: {scraped_data.get('main_content', 'N/A')[:1500]}"""
 
-    result_text = ""
-    async for event in runner.run_async(
-        user_id=session_id,
-        session_id=session.id,
-        new_message=user_message,
-    ):
-        if event.content and event.content.parts:
-            for part in event.content.parts:
-                if hasattr(part, "text") and part.text:
-                    result_text = part.text  # Keep the last agent's output
+        company_profile = await _call_agent(COMPANY_PROFILER_INSTRUCTION, profiler_input)
 
-    return {
-        "session_id": session.id,
-        "raw_output": result_text,
-        "success": bool(result_text),
-    }
+        # --- Agent 2: Competitor Finder ---
+        # Tool: search_competitors
+        # Extract company name and industry from profile for search
+        try:
+            profile_data = json.loads(company_profile)
+            company_name = profile_data.get("name", "")
+            industry = profile_data.get("industry", "")
+        except json.JSONDecodeError:
+            company_name = scraped_data.get("title", "").split("|")[0].strip()
+            industry = "general"
 
+        search_results = search_competitors(company_name, industry)
+
+        finder_input = f"""Based on this company profile and search results, identify their top 4 competitors.
+
+COMPANY PROFILE:
+{company_profile}
+
+SEARCH RESULTS:
+{json.dumps(search_results, indent=2)[:3000]}"""
+
+        competitors_output = await _call_agent(COMPETITOR_FINDER_INSTRUCTION, finder_input)
+
+        # Combine Phase 1 outputs
+        combined_output = f"""COMPANY PROFILE:
+{company_profile}
+
+---
+
+COMPETITORS DISCOVERED:
+{competitors_output}"""
+
+        return {
+            "session_id": session_id,
+            "raw_output": combined_output,
+            "company_profile": company_profile,
+            "competitors": competitors_output,
+            "success": True,
+        }
+
+    except Exception as e:
+        return {
+            "session_id": session_id,
+            "raw_output": f"Discovery phase error: {str(e)}",
+            "success": False,
+        }
+
+
+# ============================================================
+# PHASE 2: ANALYSIS PIPELINE
+# ============================================================
 
 async def run_analysis_phase(
     company_profile: str,
@@ -116,99 +244,104 @@ async def run_analysis_phase(
 ) -> dict:
     """
     Run Phase 2: Deep analysis + gap identification + strategy.
+    Agents: CompetitorAnalyst → GapAnalyst → StrategyAdvisor
     Called after HITL confirmation of competitor list.
-    
-    Args:
-        company_profile: JSON string of company profile from Phase 1
-        competitors: JSON string of confirmed competitor list
-        session_id: Session identifier for continuity
-        
-    Returns:
-        Dictionary with full analysis results
     """
-    runner = Runner(
-        agent=analysis_pipeline,
-        app_name=APP_NAME,
-        session_service=session_service,
-    )
+    try:
+        # --- Agent 3: Competitor Analyst ---
+        # Tool: search_company_details
+        # Search for details on each confirmed competitor
+        competitor_names = []
+        try:
+            comp_list = json.loads(competitors) if isinstance(competitors, str) else competitors
+            if isinstance(comp_list, list):
+                competitor_names = comp_list
+            elif isinstance(comp_list, dict) and "competitors" in comp_list:
+                competitor_names = [c.get("name", c) for c in comp_list["competitors"]]
+        except (json.JSONDecodeError, TypeError):
+            competitor_names = [c.strip() for c in competitors.split("\n") if c.strip()]
 
-    session = await session_service.create_session(
-        app_name=APP_NAME,
-        user_id=session_id,
-    )
+        # Search for each competitor's details
+        all_search_results = {}
+        for name in competitor_names[:4]:
+            result = search_company_details(name)
+            all_search_results[name] = result
 
-    # Provide context from Phase 1 + HITL confirmation
-    context_message = f"""Continue the competitive analysis with these confirmed inputs:
+        analyst_input = f"""Analyze these competitors in detail based on search results.
+
+TARGET COMPANY PROFILE:
+{company_profile}
+
+COMPETITOR SEARCH RESULTS:
+{json.dumps(all_search_results, indent=2)[:4000]}
+
+Competitors to analyze: {', '.join(competitor_names)}"""
+
+        competitor_analysis = await _call_agent(COMPETITOR_ANALYST_INSTRUCTION, analyst_input)
+
+        # --- Agent 4: Gap Analyst ---
+        gap_input = f"""Compare the target company against these competitor profiles and identify gaps.
+
+TARGET COMPANY:
+{company_profile}
+
+COMPETITOR PROFILES:
+{competitor_analysis}"""
+
+        gap_analysis = await _call_agent(GAP_ANALYST_INSTRUCTION, gap_input)
+
+        # --- Agent 5: Strategy Advisor ---
+        strategy_input = f"""Based on this gap analysis, generate strategic recommendations.
 
 COMPANY PROFILE:
 {company_profile}
 
-CONFIRMED COMPETITORS TO ANALYZE:
-{competitors}
+GAP ANALYSIS:
+{gap_analysis}
 
-Now perform deep competitor analysis, identify gaps, and generate strategic recommendations."""
+COMPETITIVE CONTEXT:
+Competitors analyzed: {', '.join(competitor_names)}"""
 
-    result_text = ""
-    async for event in runner.run_async(
-        user_id=session_id,
-        session_id=session.id,
-        new_message=context_message,
-    ):
-        if event.content and event.content.parts:
-            for part in event.content.parts:
-                if hasattr(part, "text") and part.text:
-                    result_text = part.text
+        strategy = await _call_agent(STRATEGY_ADVISOR_INSTRUCTION, strategy_input)
 
-    return {
-        "session_id": session.id,
-        "raw_output": result_text,
-        "success": bool(result_text),
-    }
+        return {
+            "session_id": session_id,
+            "raw_output": strategy,
+            "competitor_analysis": competitor_analysis,
+            "gap_analysis": gap_analysis,
+            "strategy": strategy,
+            "success": True,
+        }
 
+    except Exception as e:
+        return {
+            "session_id": session_id,
+            "raw_output": f"Analysis phase error: {str(e)}",
+            "success": False,
+        }
+
+
+# ============================================================
+# FULL PIPELINE (CLI mode, no HITL)
+# ============================================================
 
 async def run_full_pipeline(url: str) -> dict:
     """
     Run the complete pipeline without HITL (used in CLI mode).
-    
-    Args:
-        url: Target company URL
-        
-    Returns:
-        Complete analysis results
+    Executes all 5 agents sequentially.
     """
-    runner = Runner(
-        agent=root_orchestrator,
-        app_name=APP_NAME,
-        session_service=session_service,
+    # Phase 1
+    discovery = await run_discovery_phase(url)
+    if not discovery["success"]:
+        return {"success": False, "output": discovery["raw_output"]}
+
+    # Phase 2 (auto-confirm all competitors)
+    analysis = await run_analysis_phase(
+        company_profile=discovery.get("company_profile", ""),
+        competitors=discovery.get("competitors", ""),
     )
-
-    session = await session_service.create_session(
-        app_name=APP_NAME,
-        user_id="cli_user",
-    )
-
-    user_message = f"""Perform a complete competitor analysis for this company: {url}
-
-Step 1: Scrape and profile the company
-Step 2: Find their top competitors
-Step 3: Deep-dive each competitor
-Step 4: Identify competitive gaps
-Step 5: Generate strategic recommendations
-
-Provide the final output as a comprehensive JSON report."""
-
-    result_text = ""
-    async for event in runner.run_async(
-        user_id="cli_user",
-        session_id=session.id,
-        new_message=user_message,
-    ):
-        if event.content and event.content.parts:
-            for part in event.content.parts:
-                if hasattr(part, "text") and part.text:
-                    result_text = part.text
 
     return {
-        "success": bool(result_text),
-        "output": result_text,
+        "success": analysis["success"],
+        "output": analysis.get("strategy", analysis["raw_output"]),
     }
