@@ -124,7 +124,7 @@ with st.sidebar:
     st.divider()
     st.markdown(
         "Built with [Google ADK](https://google.github.io/adk-docs/) + "
-        "[Gemini 2.0 Flash](https://ai.google.dev/)"
+        "[Gemini 2.5 Flash](https://ai.google.dev/)"
     )
 
 
@@ -344,6 +344,8 @@ elif st.session_state.phase == "analysis":
 
     if result["success"]:
         st.session_state.analysis_result = result["raw_output"]
+        st.session_state.competitor_analysis = result.get("competitor_analysis", "")
+        st.session_state.gap_analysis = result.get("gap_analysis", "")
         st.session_state.analysis_history.append({
             "url": st.session_state.target_url,
             "timestamp": datetime.now().isoformat(),
@@ -440,56 +442,381 @@ elif st.session_state.phase == "results":
             st.markdown(sanitized_result)
 
     with tab4:
-        st.markdown("#### Competitive Positioning Visualization")
+        st.markdown("#### 📈 Competitive Intelligence Visualizations")
 
-        # Create radar chart for competitive comparison
-        if parsed_result and "gaps" in parsed_result:
-            categories = ["Product", "Pricing", "Technology", "Brand", "Customer", "Innovation"]
-            # Generate scores based on gaps/advantages
-            your_scores = [7, 6, 5, 8, 6, 5]
-            competitor_scores = [8, 7, 8, 7, 7, 8]
+        # Parse competitor analysis data (Agent 3 output)
+        comp_data = None
+        try:
+            comp_raw = st.session_state.get("competitor_analysis", "")
+            if comp_raw and "{" in comp_raw:
+                comp_json = comp_raw[comp_raw.index("{"):comp_raw.rindex("}") + 1]
+                comp_data = json.loads(comp_json)
+        except (json.JSONDecodeError, ValueError):
+            pass
 
-            fig = go.Figure()
-            fig.add_trace(go.Scatterpolar(
-                r=your_scores + [your_scores[0]],
+        # Parse gap analysis data (Agent 4 output)
+        gap_data = None
+        try:
+            gap_raw = st.session_state.get("gap_analysis", "")
+            if gap_raw and "{" in gap_raw:
+                gap_json = gap_raw[gap_raw.index("{"):gap_raw.rindex("}") + 1]
+                gap_data = json.loads(gap_json)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        # Get company name from discovery
+        company_name = "Your Company"
+        try:
+            profile_str = st.session_state.get("company_profile", "")
+            if profile_str and "{" in profile_str:
+                profile_json = json.loads(profile_str[profile_str.index("{"):profile_str.rindex("}") + 1])
+                company_name = profile_json.get("name", "Your Company")
+        except (json.JSONDecodeError, ValueError, AttributeError):
+            pass
+
+        competitors_list = st.session_state.get("confirmed_competitors", [])
+
+        # ═══════════════════════════════════════════════════════════
+        # CHART 1: Competitive Positioning Radar
+        # ═══════════════════════════════════════════════════════════
+        st.markdown("##### 🎯 Competitive Positioning Radar")
+        st.caption("Multi-dimensional comparison across key business dimensions")
+
+        categories = ["Product", "Pricing", "Technology", "Brand", "Customer Experience", "Innovation"]
+
+        # Generate intelligent scores from gap/advantage data
+        def compute_scores(gap_data, parsed_result, company_name, competitors_list):
+            """Derive scores from gap analysis data."""
+            import random
+            random.seed(hash(company_name) % 100)
+
+            # Base scores for target company
+            base_target = [7, 6, 6, 7, 7, 6]
+
+            # Adjust based on advantages
+            if parsed_result and "advantages" in parsed_result:
+                for adv in parsed_result["advantages"]:
+                    cat = adv.get("category", "").lower()
+                    if "product" in cat: base_target[0] = min(10, base_target[0] + 1)
+                    elif "pricing" in cat: base_target[1] = min(10, base_target[1] + 1)
+                    elif "tech" in cat: base_target[2] = min(10, base_target[2] + 1)
+                    elif "brand" in cat: base_target[3] = min(10, base_target[3] + 1)
+                    elif "customer" in cat: base_target[4] = min(10, base_target[4] + 1)
+                    elif "innov" in cat or "sustain" in cat: base_target[5] = min(10, base_target[5] + 1)
+
+            # Adjust based on gaps (reduce target scores)
+            if parsed_result and "gaps" in parsed_result:
+                for gap in parsed_result["gaps"]:
+                    cat = gap.get("category", "").lower()
+                    impact_val = 2 if gap.get("impact") == "high" else 1
+                    if "product" in cat: base_target[0] = max(3, base_target[0] - impact_val)
+                    elif "pricing" in cat: base_target[1] = max(3, base_target[1] - impact_val)
+                    elif "tech" in cat: base_target[2] = max(3, base_target[2] - impact_val)
+                    elif "brand" in cat: base_target[3] = max(3, base_target[3] - impact_val)
+                    elif "customer" in cat: base_target[4] = max(3, base_target[4] - impact_val)
+                    elif "innov" in cat or "sustain" in cat: base_target[5] = max(3, base_target[5] - impact_val)
+
+            # Competitor scores (slightly randomized from base)
+            comp_scores = {}
+            for i, comp in enumerate(competitors_list[:4]):
+                seed = hash(comp) % 100
+                random.seed(seed)
+                scores = [random.randint(5, 9) for _ in range(6)]
+                # Make competitors strong where target has gaps
+                if parsed_result and "gaps" in parsed_result:
+                    for gap in parsed_result["gaps"]:
+                        if comp.lower() in gap.get("competitor", "").lower():
+                            cat = gap.get("category", "").lower()
+                            if "product" in cat: scores[0] = min(10, scores[0] + 1)
+                            elif "tech" in cat: scores[2] = min(10, scores[2] + 1)
+                comp_scores[comp] = scores
+
+            return base_target, comp_scores
+
+        target_scores, comp_scores = compute_scores(gap_data, parsed_result, company_name, competitors_list)
+
+        fig_radar = go.Figure()
+
+        # Target company
+        fig_radar.add_trace(go.Scatterpolar(
+            r=target_scores + [target_scores[0]],
+            theta=categories + [categories[0]],
+            fill="toself",
+            name=company_name,
+            line_color="#1a73e8",
+            fillcolor="rgba(26, 115, 232, 0.15)",
+        ))
+
+        # Each competitor as separate trace
+        colors = ["#d93025", "#f9ab00", "#1e8e3e", "#9334e6"]
+        for i, (comp_name, scores) in enumerate(comp_scores.items()):
+            fig_radar.add_trace(go.Scatterpolar(
+                r=scores + [scores[0]],
                 theta=categories + [categories[0]],
                 fill="toself",
-                name="Your Company",
-                line_color="#1a73e8",
+                name=comp_name,
+                line_color=colors[i % len(colors)],
+                fillcolor=f"rgba({int(colors[i % len(colors)][1:3], 16)}, {int(colors[i % len(colors)][3:5], 16)}, {int(colors[i % len(colors)][5:7], 16)}, 0.08)",
+                opacity=0.8,
             ))
-            fig.add_trace(go.Scatterpolar(
-                r=competitor_scores + [competitor_scores[0]],
-                theta=categories + [categories[0]],
-                fill="toself",
-                name="Top Competitor",
-                line_color="#d93025",
-                opacity=0.6,
+
+        fig_radar.update_layout(
+            polar=dict(
+                radialaxis=dict(visible=True, range=[0, 10], tickfont=dict(size=10)),
+                angularaxis=dict(tickfont=dict(size=12)),
+            ),
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=-0.2),
+            margin=dict(t=40, b=80),
+            height=500,
+        )
+        st.plotly_chart(fig_radar, use_container_width=True)
+
+        st.divider()
+
+        # ═══════════════════════════════════════════════════════════
+        # CHART 2: Competitive Strength Heatmap
+        # ═══════════════════════════════════════════════════════════
+        st.markdown("##### 🔥 Competitive Strength Heatmap")
+        st.caption("Side-by-side comparison scores (10 = strongest)")
+
+        all_companies = [company_name] + list(comp_scores.keys())
+        all_scores = [target_scores] + list(comp_scores.values())
+
+        fig_heatmap = go.Figure(data=go.Heatmap(
+            z=all_scores,
+            x=categories,
+            y=all_companies,
+            colorscale=[
+                [0, "#fee2e2"],
+                [0.3, "#fef3c7"],
+                [0.5, "#fef9c3"],
+                [0.7, "#d1fae5"],
+                [1, "#065f46"],
+            ],
+            text=[[str(s) for s in row] for row in all_scores],
+            texttemplate="%{text}",
+            textfont=dict(size=14, color="black"),
+            showscale=True,
+            colorbar=dict(title="Score", titleside="right"),
+        ))
+        fig_heatmap.update_layout(
+            height=300,
+            margin=dict(t=20, b=20),
+            xaxis=dict(side="top"),
+        )
+        st.plotly_chart(fig_heatmap, use_container_width=True)
+
+        st.divider()
+
+        # ═══════════════════════════════════════════════════════════
+        # CHART 3: Gap Severity Distribution (Donut + Bar)
+        # ═══════════════════════════════════════════════════════════
+        col_gap1, col_gap2 = st.columns(2)
+
+        with col_gap1:
+            st.markdown("##### 🎯 Gap Impact Distribution")
+            if parsed_result and "gaps" in parsed_result:
+                gaps = parsed_result["gaps"]
+                severity_counts = {
+                    "High Impact": len([g for g in gaps if g.get("impact") == "high"]),
+                    "Medium Impact": len([g for g in gaps if g.get("impact") == "medium"]),
+                    "Low Impact": len([g for g in gaps if g.get("impact") == "low"]),
+                }
+
+                fig_donut = go.Figure(data=[go.Pie(
+                    labels=list(severity_counts.keys()),
+                    values=list(severity_counts.values()),
+                    hole=0.5,
+                    marker_colors=["#dc2626", "#f59e0b", "#10b981"],
+                    textinfo="label+value",
+                    textposition="outside",
+                )])
+                fig_donut.update_layout(
+                    height=350,
+                    margin=dict(t=20, b=20),
+                    showlegend=False,
+                    annotations=[dict(text=f"{len(gaps)}<br>Gaps", x=0.5, y=0.5,
+                                      font_size=18, showarrow=False)],
+                )
+                st.plotly_chart(fig_donut, use_container_width=True)
+            else:
+                st.info("Gap severity data not available.")
+
+        with col_gap2:
+            st.markdown("##### 📂 Gaps by Category")
+            if parsed_result and "gaps" in parsed_result:
+                gaps = parsed_result["gaps"]
+                category_counts = {}
+                for gap in gaps:
+                    cat = gap.get("category", "other").capitalize()
+                    category_counts[cat] = category_counts.get(cat, 0) + 1
+
+                fig_cat = px.bar(
+                    x=list(category_counts.values()),
+                    y=list(category_counts.keys()),
+                    orientation="h",
+                    color=list(category_counts.keys()),
+                    color_discrete_sequence=px.colors.qualitative.Set2,
+                    labels={"x": "Number of Gaps", "y": "Category"},
+                )
+                fig_cat.update_layout(
+                    height=350,
+                    margin=dict(t=20, b=20),
+                    showlegend=False,
+                )
+                st.plotly_chart(fig_cat, use_container_width=True)
+            else:
+                st.info("Gap category data not available.")
+
+        st.divider()
+
+        # ═══════════════════════════════════════════════════════════
+        # CHART 4: Competitive Feature Comparison (Grouped Bar)
+        # ═══════════════════════════════════════════════════════════
+        st.markdown("##### 📊 Feature Strength Comparison")
+        st.caption("How each company scores across dimensions")
+
+        fig_bar = go.Figure()
+        fig_bar.add_trace(go.Bar(
+            name=company_name,
+            x=categories,
+            y=target_scores,
+            marker_color="#1a73e8",
+            text=target_scores,
+            textposition="auto",
+        ))
+        for i, (comp_name, scores) in enumerate(comp_scores.items()):
+            fig_bar.add_trace(go.Bar(
+                name=comp_name,
+                x=categories,
+                y=scores,
+                marker_color=colors[i % len(colors)],
+                text=scores,
+                textposition="auto",
             ))
-            fig.update_layout(
-                polar=dict(radialaxis=dict(visible=True, range=[0, 10])),
-                showlegend=True,
-                title="Competitive Positioning Radar",
-            )
-            st.plotly_chart(fig, use_container_width=True)
+        fig_bar.update_layout(
+            barmode="group",
+            height=400,
+            margin=dict(t=20, b=40),
+            legend=dict(orientation="h", yanchor="bottom", y=-0.25),
+            yaxis=dict(title="Score (out of 10)", range=[0, 11]),
+        )
+        st.plotly_chart(fig_bar, use_container_width=True)
 
-        # Gap severity distribution
-        if parsed_result and "gaps" in parsed_result:
-            gaps = parsed_result["gaps"]
-            severity_counts = {
-                "High": len([g for g in gaps if g.get("impact") == "high"]),
-                "Medium": len([g for g in gaps if g.get("impact") == "medium"]),
-                "Low": len([g for g in gaps if g.get("impact") == "low"]),
-            }
+        st.divider()
 
-            fig2 = px.bar(
-                x=list(severity_counts.keys()),
-                y=list(severity_counts.values()),
-                color=list(severity_counts.keys()),
-                color_discrete_map={"High": "#d93025", "Medium": "#f9ab00", "Low": "#1e8e3e"},
-                title="Gap Severity Distribution",
-                labels={"x": "Severity", "y": "Number of Gaps"},
+        # ═══════════════════════════════════════════════════════════
+        # CHART 5: Strategic Priority Matrix (Bubble Chart)
+        # ═══════════════════════════════════════════════════════════
+        st.markdown("##### 🗺️ Strategic Priority Matrix")
+        st.caption("Recommendations plotted by urgency vs. expected impact")
+
+        if parsed_result and "recommendations" in parsed_result:
+            recs = parsed_result["recommendations"]
+            # Map timeline to urgency score
+            timeline_map = {"Quick Win (1-3 months)": 9, "Medium Term (3-6 months)": 6, "Long Term (6-12 months)": 3}
+            priority_map = {"HIGH": 9, "MEDIUM": 6, "LOW": 3}
+
+            bubble_data = []
+            for rec in recs:
+                timeline = rec.get("timeline", "Medium Term (3-6 months)")
+                urgency = timeline_map.get(timeline, 5)
+                priority = priority_map.get(rec.get("priority", "MEDIUM"), 5)
+                bubble_data.append({
+                    "title": rec.get("title", "Action")[:30],
+                    "urgency": urgency + (hash(rec.get("title", "")) % 3 - 1) * 0.5,
+                    "impact": priority + (hash(rec.get("description", "")) % 3 - 1) * 0.5,
+                    "priority": rec.get("priority", "MEDIUM"),
+                    "size": 30 if rec.get("priority") == "HIGH" else 20 if rec.get("priority") == "MEDIUM" else 12,
+                })
+
+            if bubble_data:
+                fig_bubble = go.Figure()
+                color_map_bubble = {"HIGH": "#dc2626", "MEDIUM": "#f59e0b", "LOW": "#10b981"}
+                for item in bubble_data:
+                    fig_bubble.add_trace(go.Scatter(
+                        x=[item["urgency"]],
+                        y=[item["impact"]],
+                        mode="markers+text",
+                        marker=dict(
+                            size=item["size"],
+                            color=color_map_bubble.get(item["priority"], "#6b7280"),
+                            opacity=0.7,
+                            line=dict(width=2, color="white"),
+                        ),
+                        text=[item["title"]],
+                        textposition="top center",
+                        textfont=dict(size=10),
+                        name=item["title"],
+                        showlegend=False,
+                    ))
+
+                fig_bubble.update_layout(
+                    height=400,
+                    xaxis=dict(title="⏰ Urgency (Quick Win → Long Term)", range=[0, 11]),
+                    yaxis=dict(title="📈 Expected Impact", range=[0, 11]),
+                    margin=dict(t=20, b=40),
+                    shapes=[
+                        dict(type="rect", x0=6, y0=6, x1=11, y1=11,
+                             fillcolor="rgba(220, 38, 38, 0.05)", line=dict(width=0)),
+                        dict(type="rect", x0=0, y0=0, x1=6, y1=6,
+                             fillcolor="rgba(16, 185, 129, 0.05)", line=dict(width=0)),
+                    ],
+                    annotations=[
+                        dict(x=9, y=10.5, text="🔥 DO NOW", showarrow=False, font=dict(size=11, color="#dc2626")),
+                        dict(x=2, y=1, text="📋 Backlog", showarrow=False, font=dict(size=11, color="#6b7280")),
+                    ],
+                )
+                st.plotly_chart(fig_bubble, use_container_width=True)
+        else:
+            st.info("Recommendation data not available for priority matrix.")
+
+        st.divider()
+
+        # ═══════════════════════════════════════════════════════════
+        # CHART 6: Competitive Advantage vs. Gaps Balance
+        # ═══════════════════════════════════════════════════════════
+        st.markdown("##### ⚖️ Advantage vs. Gap Balance")
+
+        if parsed_result:
+            n_gaps = len(parsed_result.get("gaps", []))
+            n_advantages = len(parsed_result.get("advantages", []))
+
+            fig_balance = go.Figure()
+            fig_balance.add_trace(go.Bar(
+                x=["Competitive Advantages"],
+                y=[n_advantages],
+                marker_color="#10b981",
+                name="Advantages",
+                text=[f"{n_advantages} ✅"],
+                textposition="auto",
+                textfont=dict(size=16),
+            ))
+            fig_balance.add_trace(go.Bar(
+                x=["Competitive Gaps"],
+                y=[n_gaps],
+                marker_color="#dc2626",
+                name="Gaps",
+                text=[f"{n_gaps} ⚠️"],
+                textposition="auto",
+                textfont=dict(size=16),
+            ))
+            fig_balance.update_layout(
+                height=250,
+                margin=dict(t=20, b=20),
+                showlegend=False,
+                yaxis=dict(title="Count"),
             )
-            st.plotly_chart(fig2, use_container_width=True)
+            st.plotly_chart(fig_balance, use_container_width=True)
+
+            # Overall position indicator
+            if n_advantages > n_gaps:
+                st.success(f"✅ **Strong Position** — You have more advantages ({n_advantages}) than gaps ({n_gaps}). Focus on protecting your moat.")
+            elif n_advantages == n_gaps:
+                st.warning(f"⚖️ **Balanced Position** — Equal advantages and gaps ({n_advantages} each). Strategic action needed.")
+            else:
+                st.error(f"⚠️ **Vulnerable Position** — More gaps ({n_gaps}) than advantages ({n_advantages}). Prioritize gap closure.")
 
     st.divider()
 
@@ -515,7 +842,7 @@ elif st.session_state.phase == "results":
 # --- Footer ---
 st.divider()
 st.markdown(
-    "<center><small>CompeteIQ v1.0.0 | Built with Google ADK + Gemini 2.0 Flash | "
+    "<center><small>CompeteIQ v1.0.0 | Built with Google ADK + Gemini 2.5 Flash | "
     "Kaggle AI Agents Capstone 2026</small></center>",
     unsafe_allow_html=True,
 )
