@@ -343,6 +343,8 @@ elif st.session_state.phase == "discovery":
         if "RESOURCE_EXHAUSTED" in raw_err or "429" in raw_err:
             st.warning("⏳ **Daily API limit reached.** Free tier allows ~20 requests/day. "
                        "Please wait for quota to reset or switch to a new API key in Settings → Secrets.")
+        elif "503" in raw_err or "UNAVAILABLE" in raw_err:
+            st.warning("⚡ **Model temporarily overloaded.** Gemini is experiencing high demand. Please try again in 30 seconds.")
         else:
             st.error("Discovery phase failed.")
             with st.expander("Show technical details"):
@@ -461,6 +463,8 @@ elif st.session_state.phase == "analysis":
         if "RESOURCE_EXHAUSTED" in raw_err or "429" in raw_err:
             st.warning("⏳ **Daily API limit reached.** Free tier allows ~20 requests/day. "
                        "Please wait for quota to reset or switch to a new API key in Settings → Secrets.")
+        elif "503" in raw_err or "UNAVAILABLE" in raw_err:
+            st.warning("⚡ **Model temporarily overloaded.** Gemini is experiencing high demand. Please try again in 30 seconds.")
         else:
             st.error("Analysis failed.")
             with st.expander("Show technical details"):

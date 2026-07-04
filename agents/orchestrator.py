@@ -200,10 +200,11 @@ def _call_agent(instruction: str, user_message: str, max_retries: int = 3) -> st
     Each call represents one specialized agent in the pipeline.
     Synchronous to avoid event loop conflicts with Streamlit.
 
-    Includes automatic retry with exponential backoff for rate limits (429).
+    Includes automatic retry with exponential backoff for rate limits (429)
+    and server overload (503).
     """
     import time as _time
-    from google.genai.errors import ClientError
+    from google.genai.errors import ClientError, ServerError
 
     client = _get_client()
     last_error = None
@@ -223,18 +224,21 @@ def _call_agent(instruction: str, user_message: str, max_retries: int = 3) -> st
             last_error = e
             error_str = str(e)
             if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
-                # Check if it's a DAILY limit (no point retrying today)
                 if "PerDay" in error_str:
                     raise RuntimeError(
                         f"Daily free-tier quota exhausted (20 requests/day for {MODEL_NAME}). "
                         f"Your quota resets at midnight Pacific Time. "
                         f"Try again tomorrow, or create a new API key on a different Google Cloud project."
                     ) from e
-                # Per-minute rate limit — retry with backoff
-                wait = (2 ** attempt) * 15  # 15s, 30s, 60s
+                wait = (2 ** attempt) * 15
                 _time.sleep(wait)
             else:
                 raise
+        except ServerError as e:
+            # 503 UNAVAILABLE — model overloaded, retry with backoff
+            last_error = e
+            wait = (2 ** attempt) * 20  # 20s, 40s, 80s
+            _time.sleep(wait)
 
     raise last_error or RuntimeError("Agent call failed after retries.")
 
