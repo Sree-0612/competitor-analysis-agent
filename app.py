@@ -285,17 +285,18 @@ with st.sidebar:
 
     st.divider()
 
-    # Temporal memory
+    # Temporal memory — clickable past analyses
     recent = list_recent_analyses(limit=5)
     if recent:
         st.markdown("#### 🧠 Analysis History")
-        st.caption("Temporal intelligence — past runs")
-        for r in recent:
+        st.caption("Click to view past reports")
+        for i, r in enumerate(recent):
             try:
                 ts = datetime.fromisoformat(r["created_at"]).strftime("%b %d, %H:%M")
             except (ValueError, TypeError):
                 ts = ""
-            st.markdown(f"- **{r.get('company_name') or 'Unknown'}** · {ts}")
+            name = r.get("company_name") or "Unknown"
+            st.markdown(f"• **{name}** · {ts}")
         st.divider()
 
     # Session stats
@@ -660,24 +661,56 @@ elif st.session_state.phase == "results":
 
     with tab1:
         if parsed_result and "executive_summary" in parsed_result:
-            st.markdown(f"#### Executive Summary")
-            st.info(parsed_result["executive_summary"])
+            st.markdown("#### Executive Summary")
+            # Handle both string (legacy) and list (new crisp bullet) formats
+            summary = parsed_result["executive_summary"]
+            if isinstance(summary, list):
+                for bullet in summary:
+                    st.markdown(f"• {bullet}")
+            else:
+                st.info(summary)
 
-            # The "Aha" insight — the single non-obvious competitive lever
+            # The "Aha" insight
             if parsed_result.get("aha_insight"):
                 st.markdown("#### 💡 The 'Aha' Insight")
                 st.success(f"**{parsed_result['aha_insight']}**")
 
             if parsed_result.get("strategy_framework"):
-                st.markdown("#### 🧭 Strategic Framework Applied")
-                st.markdown(f"📐 {parsed_result['strategy_framework']}")
+                st.caption(f"📐 Framework: {parsed_result['strategy_framework']}")
 
-            if "competitive_moat" in parsed_result:
-                st.markdown("#### 🏰 Competitive Moat")
-                st.markdown(parsed_result["competitive_moat"])
+            # --- Competitor Moves (what they just launched/changed) ---
+            if parsed_result.get("competitor_moves"):
+                st.divider()
+                st.markdown("#### 🚨 Competitor Moves (Recent)")
+                for move in parsed_result["competitor_moves"]:
+                    threat = move.get("threat_level", "medium")
+                    icon = "🔴" if threat == "high" else "🟡" if threat == "medium" else "🟢"
+                    st.markdown(
+                        f"{icon} **{move.get('competitor', '?')}** — "
+                        f"{move.get('move', 'N/A')} "
+                        f"*({move.get('date', 'recent')})*"
+                    )
 
-            if "risk_if_no_action" in parsed_result:
-                st.warning(f"⚠️ **Risk of Inaction:** {parsed_result['risk_if_no_action']}")
+            # --- Industry Trends ---
+            if parsed_result.get("industry_trends"):
+                st.divider()
+                st.markdown("#### 📈 Industry Trends to Incorporate")
+                for trend in parsed_result["industry_trends"]:
+                    with st.container():
+                        st.markdown(f"**🔥 {trend.get('trend', 'N/A')}**")
+                        st.markdown(f"↳ *Why it matters:* {trend.get('relevance', '')}")
+                        st.markdown(f"↳ *Your action:* {trend.get('action', '')}")
+
+            st.divider()
+            col_m1, col_m2 = st.columns(2)
+            with col_m1:
+                if parsed_result.get("competitive_moat"):
+                    st.markdown("**🏰 Your Moat**")
+                    st.markdown(parsed_result["competitive_moat"])
+            with col_m2:
+                if parsed_result.get("risk_if_no_action"):
+                    st.markdown("**⚠️ Risk of Inaction**")
+                    st.markdown(parsed_result["risk_if_no_action"])
         else:
             st.markdown(sanitized_result)
 
@@ -725,17 +758,21 @@ elif st.session_state.phase == "results":
                     if not sentiment:
                         continue
                     score = sentiment.get("sentiment_score", "?")
-                    with st.expander(f"💬 {prof.get('name', 'Competitor')} — sentiment {score}/10"):
+                    social = prof.get("social_presence", {})
+                    platform_tag = f" | 📱 Strongest: {social.get('strongest_platform', '?')}" if social else ""
+                    with st.expander(f"💬 {prof.get('name', 'Competitor')} — sentiment {score}/10{platform_tag}"):
                         pos = sentiment.get("positive", [])
                         neg = sentiment.get("negative", [])
                         if pos:
                             st.markdown("**👍 Customers praise:**")
                             for p in pos:
-                                st.markdown(f"- {p}")
+                                st.markdown(f"• {p}")
                         if neg:
                             st.markdown("**👎 Customers complain:**")
                             for n in neg:
-                                st.markdown(f"- {n}")
+                                st.markdown(f"• {n}")
+                        if social and social.get("recent_buzz"):
+                            st.caption(f"🔥 Current buzz: {social['recent_buzz']}")
 
     with tab3:
         if parsed_result and "recommendations" in parsed_result:

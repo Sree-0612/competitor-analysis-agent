@@ -26,6 +26,7 @@ from tools.search import (
     search_competitors,
     search_company_details,
     search_social_sentiment,
+    search_industry_trends,
 )
 from tools.memory import save_analysis, get_previous_analysis
 from config.settings import GOOGLE_API_KEY, MODEL_NAME, APP_NAME
@@ -95,6 +96,10 @@ OUTPUT FORMAT (respond ONLY with this JSON, no other text):
                 "negative": ["What customers complain about (from reviews)"],
                 "sentiment_score": 7
             },
+            "social_presence": {
+                "strongest_platform": "Reddit/Instagram/X/TikTok — where they have most buzz",
+                "recent_buzz": "What people are talking about right now (1 sentence)"
+            },
             "recent_launches": ["Latest product/initiative"],
             "target_audience": "Who they serve",
             "sources": ["https://url-of-a-claim", "https://another-source"]
@@ -145,48 +150,59 @@ The feature_matrix booleans indicate whether each company HAS each feature (true
 false=no/red). Use the SAME feature order for every company. Include the target company first.
 Be specific and actionable. Minimum 3 gaps and 2 advantages. Attach source URLs to gaps."""
 
-STRATEGY_ADVISOR_INSTRUCTION = """You are a Chief Strategy Officer providing competitive intelligence recommendations.
-Based on gap analysis, generate a prioritized strategic action plan.
+STRATEGY_ADVISOR_INSTRUCTION = """You are a Chief Strategy Officer providing competitive intelligence.
 
-CRITICAL RULES — this is what separates a $100k consulting insight from generic AI slop:
-1. DO NOT give generic advice like "improve your technology" or "enhance marketing".
-   Give 3 SPECIFIC engineering or marketing 'plays' the company can execute in the next 6 months.
+FORMATTING RULES (CRITICAL — judges hate walls of text):
+- Every point MUST be a single crisp sentence. Max 15 words per bullet.
+- executive_summary: EXACTLY 3 bullet points, not a paragraph.
+- Each recommendation play: ONE concrete sentence, not a paragraph.
+- Use specific numbers, names, and dates. Never be vague.
+
+STRATEGY RULES — this separates $100k consulting from generic AI:
+1. NO generic advice. Give SPECIFIC plays with product names, features, timeframes.
    BAD:  "Improve the user interface."
-   GOOD: "Add a 15-inch OLED rear-passenger display because the competitor just shipped one
-          and Reddit users cite it as their top reason for switching."
-2. Apply a named strategy framework: "Jobs to be Done" (JTBD) or "Blue Ocean Strategy".
-   State which framework each play uses.
-3. GROUND every claim in evidence. When you reference a competitor fact, cite the source URL.
-4. Find the 'Aha' insight — one specific, non-obvious gap that is the SINGLE biggest lever.
+   GOOD: "Launch a 15-inch OLED rear display — competitor X shipped one and Reddit users cite it as #1 switch reason."
+2. Apply "Jobs to be Done" (JTBD) or "Blue Ocean Strategy" framework.
+3. CITE source URLs for every factual claim.
+4. Find ONE non-obvious 'Aha' insight — the single biggest lever.
 
 OUTPUT FORMAT (respond ONLY with this JSON, no other text):
 {
-    "executive_summary": "2-3 sentence overview of position and key action needed",
-    "aha_insight": "The single most surprising, non-obvious competitive insight discovered",
-    "strategy_framework": "Blue Ocean Strategy / Jobs to be Done — and why it applies here",
+    "executive_summary": [
+        "Bullet 1: Your market position in one sentence",
+        "Bullet 2: The single biggest threat",
+        "Bullet 3: The #1 action to take now"
+    ],
+    "aha_insight": "One surprising non-obvious insight (max 2 sentences)",
+    "strategy_framework": "JTBD / Blue Ocean — one sentence on why",
+    "competitor_moves": [
+        {"competitor": "Name", "move": "What they just launched/changed (specific)", "date": "When", "threat_level": "high/medium/low"},
+        {"competitor": "Name", "move": "Another recent move", "date": "When", "threat_level": "high/medium/low"}
+    ],
+    "industry_trends": [
+        {"trend": "Specific trend happening NOW in this industry", "relevance": "Why it matters to you (1 sentence)", "action": "What to do about it (1 sentence)"}
+    ],
     "recommendations": [
         {
             "priority": "HIGH/MEDIUM/LOW",
-            "title": "Short action title",
-            "play": "The SPECIFIC engineering/marketing play — concrete, not generic",
-            "framework": "JTBD / Blue Ocean — which framework this play uses",
-            "description": "What to do and why, grounded in competitor evidence",
+            "title": "5-word action title",
+            "play": "ONE specific sentence: what to build/launch/change",
+            "framework": "JTBD / Blue Ocean",
             "addresses_gap": "Which gap this fixes",
-            "timeline": "Quick Win (1-3 months) / Medium Term (3-6 months) / Long Term (6-12 months)",
-            "expected_impact": "Quantified improvement to expect",
-            "evidence_url": "https://source-supporting-this-play"
+            "timeline": "Quick Win (1-3mo) / Medium (3-6mo) / Long (6-12mo)",
+            "expected_impact": "Specific measurable outcome",
+            "evidence_url": "https://source-url"
         }
     ],
-    "quick_wins": ["Immediate specific actions achievable this week"],
-    "competitive_moat": "Strongest advantage and how to protect it",
-    "risk_if_no_action": "What happens if gaps not addressed",
-    "industry_trend_alignment": "How recommendations align with industry direction",
+    "quick_wins": ["Specific action 1 (this week)", "Specific action 2 (this week)"],
+    "competitive_moat": "Your strongest advantage in one sentence",
+    "risk_if_no_action": "What you lose if you don't act (specific, with timeline)",
     "sources": [
-        {"claim": "A specific claim used in the strategy", "url": "https://source-url"}
+        {"claim": "Specific fact", "url": "https://source-url"}
     ]
 }
-Maximum 6 recommendations. At least 1 Quick Win. Every 'play' must be specific and evidence-backed.
-Populate evidence_url and sources with REAL URLs from the provided data."""
+Max 6 recommendations. At least 2 Quick Wins. EVERY point must be crisp, specific, evidence-backed.
+NO PARAGRAPHS. Only bullet-length sentences."""
 
 
 def _get_client() -> genai.Client:
@@ -415,6 +431,14 @@ COMPETITOR PROFILES:
             f"- [{s['platform']}] {s['title']}: {s['url']}"
             for s in all_sources[:25]
         )
+
+        # --- Industry Trends (for trend-aware strategy) ---
+        company_name, industry = _extract_name_industry(company_profile)
+        trends_data = search_industry_trends(industry) if industry else {}
+        trends_context = ""
+        if trends_data.get("success"):
+            trends_context = f"\nINDUSTRY TRENDS ({industry}):\n{trends_data.get('answer', '')[:800]}"
+
         strategy_input = f"""Based on this gap analysis, generate specific, evidence-backed strategic plays.
 
 COMPANY PROFILE:
@@ -425,16 +449,20 @@ GAP ANALYSIS:
 
 COMPETITIVE CONTEXT:
 Competitors analyzed: {', '.join(competitor_names)}
+{trends_context}
 
 AVAILABLE SOURCE URLS (cite these in evidence_url / sources):
 {sources_context}
 
-Give 3+ specific engineering/marketing plays using a named framework. No generic advice."""
+REQUIREMENTS:
+- Output competitor_moves: what each competitor recently launched/changed
+- Output industry_trends: what's trending in this industry that the company should incorporate
+- Give 3+ specific plays using JTBD or Blue Ocean framework
+- ALL output must be CRISP BULLETS, not paragraphs. Max 15 words per point."""
 
         strategy = _call_agent(STRATEGY_ADVISOR_INSTRUCTION, strategy_input)
 
         # --- Persist to memory for temporal intelligence ---
-        company_name, industry = _extract_name_industry(company_profile)
         previous = get_previous_analysis(company_url=company_name or "unknown")
         save_analysis(
             company_url=company_name or "unknown",
