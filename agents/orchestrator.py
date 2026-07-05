@@ -109,7 +109,7 @@ OUTPUT FORMAT (respond ONLY with this JSON, no other text):
         {"claim": "Specific factual claim made", "url": "https://source-url", "platform": "Reddit/G2/Web"}
     ]
 }
-Be thorough and factual. sentiment_score is 1-10. Focus on current info (2024-2025).
+Be thorough and factual. sentiment_score is 1-10. Focus on current info (2025-2026). Today's date is July 2026.
 Populate 'sources' and 'key_sources' with REAL URLs from the provided search results."""
 
 GAP_ANALYST_INSTRUCTION = """You are a Strategic Gap Analysis Expert.
@@ -196,13 +196,14 @@ OUTPUT FORMAT (respond ONLY with this JSON, no other text):
     ],
     "quick_wins": ["Specific action 1 (this week)", "Specific action 2 (this week)"],
     "competitive_moat": "Your strongest advantage in one sentence",
-    "risk_if_no_action": "What you lose if you don't act (specific, with timeline)",
+    "risk_if_no_action": "What you lose if you don't act (specific, future timeline from July 2026 onwards)",
     "sources": [
         {"claim": "Specific fact", "url": "https://source-url"}
     ]
 }
 Max 6 recommendations. At least 2 Quick Wins. EVERY point must be crisp, specific, evidence-backed.
-NO PARAGRAPHS. Only bullet-length sentences."""
+NO PARAGRAPHS. Only bullet-length sentences.
+IMPORTANT: Today's date is July 2026. All timelines must be FUTURE (2026-2027). Never reference past dates as future."""
 
 
 def _get_client(api_key: str = "") -> genai.Client:

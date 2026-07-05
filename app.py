@@ -257,17 +257,14 @@ with st.sidebar:
 
     # System Status (green/red dots)
     st.markdown("#### System Status")
-    col_s1, col_s2 = st.columns(2)
-    with col_s1:
-        if GOOGLE_API_KEY:
-            st.markdown("🟢 Gemini API")
-        else:
-            st.markdown("🔴 Gemini API")
-    with col_s2:
-        if TAVILY_API_KEY:
-            st.markdown("🟢 Tavily Search")
-        else:
-            st.markdown("🔴 Tavily Search")
+    if GOOGLE_API_KEY:
+        st.markdown("🟢 Gemini API")
+    else:
+        st.markdown("🔴 Gemini API")
+    if TAVILY_API_KEY:
+        st.markdown("🟢 Tavily Search")
+    else:
+        st.markdown("🔴 Tavily Search")
     st.markdown("🟢 Jina Reader")
 
     st.divider()
@@ -327,7 +324,7 @@ with st.sidebar:
 # --- Main Content ---
 st.markdown('<p class="main-header">CompeteIQ</p>', unsafe_allow_html=True)
 st.markdown(
-    '<p class="sub-header">AI-Powered Competitive Intelligence in 30 Seconds</p>',
+    '<p class="sub-header">AI-Powered Competitive Intelligence</p>',
     unsafe_allow_html=True,
 )
 st.markdown("")
@@ -341,15 +338,13 @@ if st.session_state.phase == "input":
         "discover competitors, analyze gaps, and generate actionable strategy."
     )
 
-    col1, col2 = st.columns([3, 1])
-    with col1:
+    with st.form("url_form"):
         url_input = st.text_input(
             "Company URL",
             placeholder="https://www.bmw.com",
             label_visibility="collapsed",
         )
-    with col2:
-        analyze_btn = st.button("🔍 Analyze", type="primary", use_container_width=True)
+        analyze_btn = st.form_submit_button("🔍 Analyze", type="primary")
 
     # Example URLs for quick testing
     st.markdown("**Try these examples:**")
