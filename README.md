@@ -1,280 +1,184 @@
-# 🎯 CompeteIQ — AI-Powered Competitor Analysis Agent
+# 🎯 CompeteIQ — AI-Powered Competitive Intelligence
 
-> **Competitive intelligence that costs $15K/year from Crayon or Klue — delivered in 30 seconds, for free.**
+> Paste your company URL → get a full competitive analysis with actionable strategy in under 2 minutes.
 
-CompeteIQ is a multi-agent AI system that analyzes your company's competitive landscape. Paste your company URL, and within seconds, get a comprehensive report showing who your competitors are, what they're doing better, and exactly how to respond.
+**🔗 Live Demo:** [https://completeiq-competitor-analysis-agent.streamlit.app/](https://completeiq-competitor-analysis-agent.streamlit.app/)
 
----
-
-## 🧩 Problem Statement
-
-**73% of businesses say they can't keep up with competitor moves** (Crayon 2024 State of CI Report).
-
-Enterprise competitive intelligence tools cost $15,000–$50,000/year, require dedicated analysts, and still deliver reports that are weeks old. Small and mid-size businesses are left blind to competitive threats.
-
-**The Result:** Companies miss market shifts, lose deals they should have won, and invest in features competitors already dominate.
-
-## 💡 Solution: Why Agents?
-
-Traditional tools use static databases and manual research. CompeteIQ uses **5 specialized AI agents** that autonomously:
-
-1. **Profile** your company from its website (real-time, not a stale database)
-2. **Discover** actual competitors via live web search
-3. **Analyze** each competitor's latest products, features, and strategy
-4. **Identify** specific gaps where competitors outperform you
-5. **Recommend** actionable strategy with priority and timeline
-
-Agents are uniquely suited because this task requires:
-- **Multi-step reasoning** across different data sources
-- **Tool use** (web scraping + search API)
-- **Autonomous decision-making** (which competitors matter? which gaps are critical?)
-- **Human-in-the-loop** validation (user confirms competitor list before deep analysis)
+> **💡 Don't want to wait?** Click any entry in the **Analysis History** sidebar (Spotify, Tesla, Starbucks) to instantly view pre-analyzed reports with full results, visualizations, and source citations.
 
 ---
 
-## 🏗️ Architecture
+## What It Does
+
+CompeteIQ is a 5-agent AI system that delivers competitive intelligence a business owner can act on. It discovers competitors, mines customer sentiment from Reddit/G2/Trustpilot, identifies strategic gaps, and generates specific plays using JTBD/Blue Ocean frameworks — not generic advice.
+
+---
+
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  STREAMLIT UI + CLI INTERFACE                                │
-│  (Security: URL validation, rate limiting, sanitization)     │
-└─────────────────┬───────────────────────────────────────────┘
-                  │
-┌─────────────────▼───────────────────────────────────────────┐
-│  MCP SERVER (FastMCP)                                        │
-│  Exposes: analyze_website, find_competitors,                 │
-│           get_company_details, get_industry_trends            │
-└─────────────────┬───────────────────────────────────────────┘
-                  │
-┌─────────────────▼───────────────────────────────────────────┐
-│  ROOT ORCHESTRATOR (Google ADK - SequentialAgent)             │
-│                                                              │
-│  Phase 1: Discovery                                          │
-│  ├── Agent 1: Company Profiler [scrape_website tool]         │
-│  └── Agent 2: Competitor Finder [tavily_search tool]         │
-│                                                              │
-│  ═══════════ HUMAN-IN-THE-LOOP GATE ═══════════              │
-│  User confirms/edits competitor list before proceeding       │
-│                                                              │
-│  Phase 2: Analysis                                           │
-│  ├── Agent 3: Competitor Analyst [scrape + search tools]     │
-│  ├── Agent 4: Gap Analyst [compare_features tool]            │
-│  └── Agent 5: Strategy Advisor [generate_report tool]        │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
+URL Input
+    │
+    ▼
+┌──────────────────────────────────────────────┐
+│  Agent 1: Company Profiler                   │
+│  Tool: Jina Reader (anti-bot, JS rendering)  │
+├──────────────────────────────────────────────┤
+│  Agent 2: Competitor Finder                  │
+│  Tool: Tavily Search API                     │
+└──────────────────────────────────────────────┘
+    │
+    ▼
+┌──────────────────────────────────────────────┐
+│  🙋 HUMAN-IN-THE-LOOP GATE                   │
+│  User confirms/edits/adds competitors        │
+└──────────────────────────────────────────────┘
+    │
+    ▼
+┌──────────────────────────────────────────────┐
+│  Agent 3: Competitor Analyst                 │
+│  Tools: Search + Reddit/G2 Sentiment         │
+├──────────────────────────────────────────────┤
+│  Agent 4: Gap Analyst                        │
+│  Output: Gaps, advantages, feature matrix    │
+├──────────────────────────────────────────────┤
+│  Agent 5: Strategy Advisor                   │
+│  Framework: JTBD / Blue Ocean Strategy       │
+└──────────────────────────────────────────────┘
+    │
+    ▼
+┌──────────────────────────────────────────────┐
+│  📊 Results Dashboard                        │
+│  5 tabs + PDF/JSON export + memory           │
+└──────────────────────────────────────────────┘
 ```
 
-### Agent Details
+---
 
-| Agent | Type | Tools | Purpose |
-|-------|------|-------|---------|
-| Company Profiler | LLM Agent | `scrape_website` | Extracts company profile from URL |
-| Competitor Finder | LLM Agent | `search_competitors` | Discovers competitors via web search |
-| Competitor Analyst | LLM Agent | `scrape_website`, `search_company_details` | Deep-dives each competitor |
-| Gap Analyst | LLM Agent | `compare_features`, `score_competitive_gap` | Identifies strategic gaps |
-| Strategy Advisor | LLM Agent | `generate_report_data` | Creates actionable recommendations |
-| Discovery Pipeline | SequentialAgent | — | Orchestrates Agents 1-2 |
-| Analysis Pipeline | SequentialAgent | — | Orchestrates Agents 3-5 |
+## Competition Concepts (5/6)
 
-**Total: 5 LLM Agents + 2 Orchestrator Agents = 7 Agents**
+| # | Concept | Implementation |
+|---|---------|---------------|
+| 1 | **Multi-Agent System** | 5 specialized Gemini 2.5 Flash agents in sequential pipeline |
+| 2 | **MCP Server** | FastMCP with 7 tools (scrape, search, sentiment, trends, memory) |
+| 3 | **Security** | SSRF prevention, rate limiting, output sanitization, no keys in code |
+| 4 | **Deployability** | Streamlit Cloud (live URL) + Docker + CLI |
+| 5 | **Human-in-the-Loop** | Interactive data editor — users toggle/edit/add competitors |
 
 ---
 
-## 🔧 Technology Stack
+## Key Features
 
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| Agent Framework | Google ADK | Multi-agent orchestration |
-| LLM | Gemini 2.0 Flash | All agent reasoning |
-| Web Search | Tavily API | Real-time competitor discovery |
-| Web Scraping | httpx + BeautifulSoup | Company data extraction |
-| MCP Server | FastMCP | Tool protocol compliance |
-| UI | Streamlit | Interactive web interface |
-| CLI | Typer + Rich | Command-line agent skills |
-| Visualization | Plotly | Radar charts, gap analysis |
-| Security | Custom validators | SSRF prevention, rate limiting |
-| Deployment | Streamlit Cloud / Docker | Free public hosting |
-
----
-
-## 📋 Course Concepts Demonstrated
-
-| # | Concept | Implementation | Evidence |
-|---|---------|---------------|----------|
-| 1 | **Multi-Agent System (ADK)** | 5 LLM agents + 2 SequentialAgent orchestrators | `agents/` directory |
-| 2 | **MCP Server** | FastMCP server exposing 4 tools | `mcp_server/server.py` |
-| 3 | **Security Features** | URL validation, SSRF prevention, rate limiting, output sanitization | `tools/security.py` |
-| 4 | **Deployability** | Streamlit Cloud (live URL) + Dockerfile + setup docs | `Dockerfile`, live demo |
-| 5 | **Agent Skills (CLI)** | Typer-based CLI with 4 commands | `cli.py` |
-
-**5 of 6 concepts demonstrated** (minimum requirement: 3).
+| Feature | Why It Matters |
+|---------|---------------|
+| 🧠 Jina Reader scraping | Bypasses anti-bot measures that stop 90% of scrapers |
+| 🗣️ Reddit/G2/Trustpilot sentiment | Alternative data — the "hidden truth" beyond official marketing |
+| 🔗 Source-grounded citations | Every claim has a clickable URL. Zero hallucinations. |
+| 📈 7+ Plotly visualizations | Radar, heatmap, feature matrix, bubble chart, donut |
+| 🕐 Temporal memory (SQLite) | Remembers past analyses, shows "what changed" |
+| 📄 PDF + JSON export | Full multi-page report download |
+| 🚨 Competitor Moves | What competitors just launched/changed |
+| 📈 Industry Trends | What's trending that you should incorporate |
+| 🔑 API key rotation | 4 keys auto-rotate — never hit quota limits |
 
 ---
 
-## 🚀 Quick Start
+## Tech Stack
 
-### Prerequisites
-- Python 3.11+
-- Free Google API key ([get one here](https://aistudio.google.com/apikey))
-- Free Tavily API key ([get one here](https://tavily.com))
+| Layer | Technology |
+|-------|-----------|
+| LLM | Gemini 2.5 Flash (google-genai) |
+| Scraping | Jina Reader → httpx + BeautifulSoup fallback |
+| Search | Tavily API (free tier) |
+| Sentiment | Tavily targeting Reddit, G2, Trustpilot |
+| UI | Streamlit + Plotly |
+| Memory | SQLite |
+| PDF | fpdf2 |
+| MCP | FastMCP (7 tools) |
+| CLI | Typer + Rich |
+| Deploy | Streamlit Cloud (free) |
 
-### Installation
+---
+
+## Quick Start
 
 ```bash
-# Clone the repository
-git clone https://github.com/YOUR_USERNAME/competitor-analysis-agent.git
+# Clone
+git clone https://github.com/Sree-0612/competitor-analysis-agent.git
 cd competitor-analysis-agent
 
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# Install dependencies
+# Install
 pip install -r requirements.txt
 
-# Set up environment variables
+# Set keys
 cp .env.example .env
-# Edit .env and add your API keys
-```
+# Add GOOGLE_API_KEY and TAVILY_API_KEY
 
-### Run the Web App
-
-```bash
+# Run
 streamlit run app.py
 ```
 
-### Run via CLI
+### CLI
 
 ```bash
-# Full analysis
-python cli.py analyze --url "https://www.bmw.com"
-
-# Discover competitors only
+python cli.py analyze --url "https://www.tesla.com"
 python cli.py discover --company "Nike" --industry "athletic footwear"
-
-# Profile a single company
-python cli.py profile --url "https://www.apple.com"
 ```
 
-### Run MCP Server
+### MCP Server
 
 ```bash
 python -m mcp_server.server
 ```
 
-### Run Evaluation Suite
-
-```bash
-python evaluate.py
-```
-
 ---
 
-## 🛡️ Security Features
-
-| Feature | Protection Against | Implementation |
-|---------|-------------------|----------------|
-| URL Validation | Malformed inputs, injection | Regex + urlparse validation |
-| SSRF Prevention | Internal network access | Block private IPs, localhost, internal domains |
-| Rate Limiting | Abuse, DoS | 5 requests per 5-minute window |
-| Input Sanitization | XSS, script injection | Pattern matching on dangerous strings |
-| Output Sanitization | PII leakage, key exposure | Regex redaction of sensitive patterns |
-| Secret Management | Key exposure | Environment variables, never in code |
-
----
-
-## 📊 Evaluation Results
-
-```
-══════════════════════════════════════════════════════════════════════
-  CompeteIQ - Evaluation Suite
-  Testing agent accuracy, security, and robustness
-══════════════════════════════════════════════════════════════════════
-
-🛡️  SECURITY TESTS: 14/14 passed (100%)
-⏱️  RATE LIMITING:   3/3 passed (100%)
-🌐  WEB SCRAPER:     3/3 passed (100%)
-
-  TOTAL: 20/20 tests passed (100% accuracy)
-  🎉 ALL TESTS PASSED - System is production-ready!
-```
-
----
-
-## 💼 Business Impact
-
-| Metric | Traditional CI Tools | CompeteIQ | Improvement |
-|--------|---------------------|-----------|-------------|
-| Cost | $15,000–$50,000/year | $0 (free APIs) | 100% reduction |
-| Time to insight | 2–4 weeks | 30 seconds | 99.7% faster |
-| Freshness | Monthly reports | Real-time | Always current |
-| Accessibility | Enterprise only | Anyone with a URL | Democratized |
-
-**Total Addressable Market:** $28.4B competitive intelligence market (MarketsandMarkets, 2024)
-
----
-
-## 📁 Project Structure
+## Project Structure
 
 ```
 competitor-analysis-agent/
-├── app.py                      # Streamlit web interface
-├── cli.py                      # CLI interface (Agent Skills)
-├── evaluate.py                 # Automated evaluation suite
-├── Dockerfile                  # Container deployment config
-├── requirements.txt            # Python dependencies
-├── .env.example                # Environment variable template
-├── .gitignore                  # Git ignore rules
-├── .streamlit/
-│   ├── config.toml             # Streamlit UI configuration
-│   └── secrets.toml.example    # Secrets template
-├── config/
-│   ├── __init__.py
-│   └── settings.py             # Centralized configuration
+├── app.py                  # Streamlit SaaS dashboard
+├── cli.py                  # Typer CLI
+├── evaluate.py             # Test suite
 ├── agents/
 │   ├── __init__.py
-│   ├── orchestrator.py         # Root SequentialAgent orchestrator
-│   ├── company_profiler.py     # Agent 1: Company profiling
-│   ├── competitor_finder.py    # Agent 2: Competitor discovery
-│   ├── competitor_analyst.py   # Agent 3: Deep competitor analysis
-│   ├── gap_analyst.py          # Agent 4: Gap identification
-│   └── strategy_advisor.py     # Agent 5: Strategy generation
+│   └── orchestrator.py     # 5-agent pipeline + key rotation
 ├── tools/
 │   ├── __init__.py
-│   ├── scraper.py              # Web scraping tool
-│   ├── search.py               # Tavily search tool
-│   ├── analysis.py             # Comparison & reporting tools
-│   └── security.py             # Security utilities
-└── mcp_server/
-    ├── __init__.py
-    └── server.py               # MCP Server implementation
+│   ├── scraper.py          # Jina Reader + httpx fallback
+│   ├── search.py           # Tavily search + sentiment
+│   ├── memory.py           # SQLite temporal store
+│   ├── security.py         # SSRF, rate limiter, sanitizer
+│   └── analysis.py         # Scoring utilities
+├── config/
+│   ├── __init__.py
+│   └── settings.py         # Keys, model config
+├── mcp_server/
+│   ├── __init__.py
+│   └── server.py           # 7 MCP tools
+├── requirements.txt
+├── Dockerfile
+└── .streamlit/
 ```
 
 ---
 
-## 🎥 Demo Video
+## Security
 
-[Watch the 5-minute demo on YouTube](YOUR_YOUTUBE_LINK_HERE)
-
----
-
-## 🔮 Future Roadmap
-
-- **Phase 1** (Next): Add PDF report export with charts
-- **Phase 2**: Historical tracking — compare competitive position over time
-- **Phase 3**: Industry benchmark database for instant context
-- **Phase 4**: "What-if" scenario agent for strategy simulation
+| Feature | Protection |
+|---------|-----------|
+| URL validation | Blocks malformed inputs, XSS patterns |
+| SSRF prevention | Blocks private IPs, localhost, internal domains |
+| Rate limiting | 5 requests per session |
+| Output sanitization | Redacts API keys, emails from responses |
+| Secret management | All keys in env/secrets, never in code |
 
 ---
 
-## 📄 License
+## License
 
-MIT License — see [LICENSE](LICENSE) for details.
+MIT
 
 ---
 
-## 🙏 Acknowledgments
-
-- Built during [Kaggle's 5-Day AI Agents Intensive Vibe Coding Course](https://www.kaggle.com/competitions/5-day-ai-agents-intensive-vibecoding-course-with-google) with Google
-- Powered by [Google ADK](https://google.github.io/adk-docs/) and [Gemini 2.0 Flash](https://ai.google.dev/)
-- Search powered by [Tavily](https://tavily.com)
+Built for [Kaggle AI Agents Capstone 2026](https://www.kaggle.com/competitions/vibecoding-agents-capstone-project) — Agents for Business track.
