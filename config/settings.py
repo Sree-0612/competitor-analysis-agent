@@ -22,7 +22,14 @@ def _get_secret(key: str, default: str = "") -> str:
 
 
 # --- API Keys (loaded securely) ---
+# Supports multiple Google API keys for rotation (GOOGLE_API_KEY, GOOGLE_API_KEY_2, etc.)
+# Each key = separate project = separate 20 req/day quota.
 GOOGLE_API_KEY = _get_secret("GOOGLE_API_KEY")
+GOOGLE_API_KEYS = [k for k in [
+    GOOGLE_API_KEY,
+    _get_secret("GOOGLE_API_KEY_2"),
+    _get_secret("GOOGLE_API_KEY_3"),
+] if k]
 TAVILY_API_KEY = _get_secret("TAVILY_API_KEY")
 
 # --- Agent Configuration ---

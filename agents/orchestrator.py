@@ -29,7 +29,7 @@ from tools.search import (
     search_industry_trends,
 )
 from tools.memory import save_analysis, get_previous_analysis
-from config.settings import GOOGLE_API_KEY, MODEL_NAME, APP_NAME
+from config.settings import GOOGLE_API_KEY, GOOGLE_API_KEYS, MODEL_NAME, APP_NAME
 
 
 # --- Agent System Instructions ---
@@ -205,58 +205,75 @@ Max 6 recommendations. At least 2 Quick Wins. EVERY point must be crisp, specifi
 NO PARAGRAPHS. Only bullet-length sentences."""
 
 
-def _get_client() -> genai.Client:
+def _get_client(api_key: str = "") -> genai.Client:
     """Get configured GenAI client."""
-    return genai.Client(api_key=GOOGLE_API_KEY)
+    return genai.Client(api_key=api_key or GOOGLE_API_KEY)
+
+
+# Track which key index to use next (round-robin across keys)
+_current_key_index = 0
 
 
 def _call_agent(instruction: str, user_message: str, max_retries: int = 3) -> str:
     """
     Call a single agent (Gemini with system instruction).
-    Each call represents one specialized agent in the pipeline.
-    Synchronous to avoid event loop conflicts with Streamlit.
-
-    Includes automatic retry with exponential backoff for rate limits (429)
-    and server overload (503).
+    Includes:
+      - API key rotation: cycles through GOOGLE_API_KEYS on daily quota errors
+      - Retry with backoff for per-minute limits (429) and server overload (503)
     """
     import time as _time
     from google.genai.errors import ClientError, ServerError
 
-    client = _get_client()
+    global _current_key_index
+    keys = GOOGLE_API_KEYS if GOOGLE_API_KEYS else [GOOGLE_API_KEY]
+    keys_tried = 0
     last_error = None
 
-    for attempt in range(max_retries):
-        try:
-            response = client.models.generate_content(
-                model=MODEL_NAME,
-                contents=user_message,
-                config=types.GenerateContentConfig(
-                    system_instruction=instruction,
-                    temperature=0.3,
-                ),
-            )
-            return response.text or ""
-        except ClientError as e:
-            last_error = e
-            error_str = str(e)
-            if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
-                if "PerDay" in error_str:
-                    raise RuntimeError(
-                        f"Daily free-tier quota exhausted (20 requests/day for {MODEL_NAME}). "
-                        f"Your quota resets at midnight Pacific Time. "
-                        f"Try again tomorrow, or create a new API key on a different Google Cloud project."
-                    ) from e
-                wait = (2 ** attempt) * 15
-                _time.sleep(wait)
-            else:
-                raise
-        except ServerError as e:
-            # 503 UNAVAILABLE — model overloaded, retry with backoff
-            last_error = e
-            wait = (2 ** attempt) * 20  # 20s, 40s, 80s
-            _time.sleep(wait)
+    while keys_tried < len(keys):
+        key = keys[_current_key_index % len(keys)]
+        client = _get_client(key)
 
-    raise last_error or RuntimeError("Agent call failed after retries.")
+        for attempt in range(max_retries):
+            try:
+                response = client.models.generate_content(
+                    model=MODEL_NAME,
+                    contents=user_message,
+                    config=types.GenerateContentConfig(
+                        system_instruction=instruction,
+                        temperature=0.3,
+                    ),
+                )
+                return response.text or ""
+            except ClientError as e:
+                last_error = e
+                error_str = str(e)
+                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                    if "PerDay" in error_str:
+                        # Daily limit on this key — try next key
+                        break
+                    # Per-minute limit — wait and retry same key
+                    wait = (2 ** attempt) * 15
+                    _time.sleep(wait)
+                else:
+                    raise
+            except ServerError as e:
+                last_error = e
+                wait = (2 ** attempt) * 20
+                _time.sleep(wait)
+        else:
+            # All retries exhausted on this key without a daily-limit break
+            raise last_error or RuntimeError("Agent call failed after retries.")
+
+        # Daily limit hit on this key — rotate to next
+        _current_key_index += 1
+        keys_tried += 1
+
+    # All keys exhausted
+    raise RuntimeError(
+        f"All {len(keys)} API key(s) hit their daily quota (20 req/day each). "
+        f"Add more keys as GOOGLE_API_KEY_2, GOOGLE_API_KEY_3 in Streamlit secrets, "
+        f"or wait until midnight Pacific Time for quota reset."
+    )
 
 
 def _extract_name_industry(company_profile: str) -> tuple[str, str]:
