@@ -175,10 +175,4 @@ competitor-analysis-agent/
 
 ---
 
-## License
-
-MIT
-
----
-
 Built for [Kaggle AI Agents Capstone 2026](https://www.kaggle.com/competitions/vibecoding-agents-capstone-project) — Agents for Business track.
