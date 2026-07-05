@@ -187,3 +187,15 @@ def load_analysis(company_name: str) -> Optional[dict]:
         return None
     except Exception:
         return None
+
+
+def delete_analysis(company_name: str) -> bool:
+    """Delete all analyses for a company from memory."""
+    try:
+        conn = _get_connection()
+        conn.execute("DELETE FROM analyses WHERE company_name = ?", (company_name,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False

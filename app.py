@@ -20,7 +20,7 @@ import plotly.express as px
 from config.settings import APP_NAME, APP_VERSION, GOOGLE_API_KEY, TAVILY_API_KEY
 from tools.security import validate_url, rate_limiter, sanitize_output
 from agents.orchestrator import run_discovery_phase, run_analysis_phase
-from tools.memory import list_recent_analyses, load_analysis
+from tools.memory import list_recent_analyses, load_analysis, delete_analysis
 
 
 def build_pdf_report(target: str, competitors: list, parsed: dict, fallback_text: str,
@@ -286,23 +286,29 @@ with st.sidebar:
     recent = list_recent_analyses(limit=5)
     if recent:
         st.markdown("#### 🧠 Analysis History")
-        st.caption("Click to load past report")
+        st.caption("Load or delete past reports")
         for i, r in enumerate(recent):
             try:
                 ts = datetime.fromisoformat(r["created_at"]).strftime("%b %d, %H:%M")
             except (ValueError, TypeError):
                 ts = ""
             name = r.get("company_name") or "Unknown"
-            if st.button(f"📄 {name} · {ts}", key=f"hist_{i}", use_container_width=True):
-                saved = load_analysis(name)
-                if saved:
-                    st.session_state.target_url = saved.get("company_url", name)
-                    st.session_state.confirmed_competitors = saved.get("competitors", [])
-                    st.session_state.analysis_result = saved.get("strategy", "")
-                    st.session_state.gap_analysis = saved.get("gap_analysis", "")
-                    st.session_state.competitor_analysis = ""
-                    st.session_state.analysis_sources = []
-                    st.session_state.phase = "results"
+            hcol1, hcol2 = st.columns([4, 1])
+            with hcol1:
+                if st.button(f"📄 {name} · {ts}", key=f"hist_{i}", use_container_width=True):
+                    saved = load_analysis(name)
+                    if saved:
+                        st.session_state.target_url = saved.get("company_url", name)
+                        st.session_state.confirmed_competitors = saved.get("competitors", [])
+                        st.session_state.analysis_result = saved.get("strategy", "")
+                        st.session_state.gap_analysis = saved.get("gap_analysis", "")
+                        st.session_state.competitor_analysis = ""
+                        st.session_state.analysis_sources = []
+                        st.session_state.phase = "results"
+                        st.rerun()
+            with hcol2:
+                if st.button("🗑️", key=f"del_{i}", help=f"Delete {name}"):
+                    delete_analysis(name)
                     st.rerun()
         st.divider()
 
