@@ -158,3 +158,32 @@ def list_recent_analyses(limit: int = 10) -> list[dict]:
         ]
     except Exception:
         return []
+
+
+def load_analysis(company_name: str) -> Optional[dict]:
+    """Load the most recent full analysis for a company (for history view)."""
+    try:
+        conn = _get_connection()
+        row = conn.execute(
+            """
+            SELECT * FROM analyses
+            WHERE company_name = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (company_name,),
+        ).fetchone()
+        conn.close()
+        if row:
+            return {
+                "company_name": row["company_name"],
+                "company_url": row["company_url"],
+                "industry": row["industry"],
+                "competitors": json.loads(row["competitors"] or "[]"),
+                "strategy": row["strategy"],
+                "gap_analysis": row["gap_analysis"],
+                "created_at": row["created_at"],
+            }
+        return None
+    except Exception:
+        return None

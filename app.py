@@ -20,7 +20,7 @@ import plotly.express as px
 from config.settings import APP_NAME, APP_VERSION, GOOGLE_API_KEY, TAVILY_API_KEY
 from tools.security import validate_url, rate_limiter, sanitize_output
 from agents.orchestrator import run_discovery_phase, run_analysis_phase
-from tools.memory import list_recent_analyses
+from tools.memory import list_recent_analyses, load_analysis
 
 
 def build_pdf_report(target: str, competitors: list, parsed: dict, fallback_text: str,
@@ -289,14 +289,24 @@ with st.sidebar:
     recent = list_recent_analyses(limit=5)
     if recent:
         st.markdown("#### 🧠 Analysis History")
-        st.caption("Click to view past reports")
+        st.caption("Click to load past report")
         for i, r in enumerate(recent):
             try:
                 ts = datetime.fromisoformat(r["created_at"]).strftime("%b %d, %H:%M")
             except (ValueError, TypeError):
                 ts = ""
             name = r.get("company_name") or "Unknown"
-            st.markdown(f"• **{name}** · {ts}")
+            if st.button(f"📄 {name} · {ts}", key=f"hist_{i}", use_container_width=True):
+                saved = load_analysis(name)
+                if saved:
+                    st.session_state.target_url = saved.get("company_url", name)
+                    st.session_state.confirmed_competitors = saved.get("competitors", [])
+                    st.session_state.analysis_result = saved.get("strategy", "")
+                    st.session_state.gap_analysis = saved.get("gap_analysis", "")
+                    st.session_state.competitor_analysis = ""
+                    st.session_state.analysis_sources = []
+                    st.session_state.phase = "results"
+                    st.rerun()
         st.divider()
 
     # Session stats
@@ -622,9 +632,21 @@ elif st.session_state.phase == "results":
     except (json.JSONDecodeError, ValueError):
         pass
 
+    # Parse gap analysis (Agent 4) for KPI cards + visualizations
+    gap_data = None
+    try:
+        gap_raw = st.session_state.get("gap_analysis", "")
+        if gap_raw and "{" in gap_raw:
+            gap_json = gap_raw[gap_raw.index("{"):gap_raw.rindex("}") + 1]
+            gap_data = json.loads(gap_json)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
     # --- KPI Metric Cards (SaaS Dashboard style) ---
-    n_gaps = len(parsed_result.get("gaps", [])) if parsed_result else 0
-    n_advantages = len(parsed_result.get("advantages", [])) if parsed_result else 0
+    # Use gap_data for gaps/advantages (more reliable), parsed_result for recommendations
+    kpi_gap_source = gap_data if (gap_data and gap_data.get("gaps")) else parsed_result
+    n_gaps = len(kpi_gap_source.get("gaps", [])) if kpi_gap_source else 0
+    n_advantages = len(kpi_gap_source.get("advantages", [])) if kpi_gap_source else 0
     n_recs = len(parsed_result.get("recommendations", [])) if parsed_result else 0
 
     # Determine market position label
@@ -812,16 +834,6 @@ elif st.session_state.phase == "results":
             if comp_raw and "{" in comp_raw:
                 comp_json = comp_raw[comp_raw.index("{"):comp_raw.rindex("}") + 1]
                 comp_data = json.loads(comp_json)
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-        # Parse gap analysis data (Agent 4 output)
-        gap_data = None
-        try:
-            gap_raw = st.session_state.get("gap_analysis", "")
-            if gap_raw and "{" in gap_raw:
-                gap_json = gap_raw[gap_raw.index("{"):gap_raw.rindex("}") + 1]
-                gap_data = json.loads(gap_json)
         except (json.JSONDecodeError, ValueError):
             pass
 
@@ -1023,12 +1035,16 @@ elif st.session_state.phase == "results":
         # ═══════════════════════════════════════════════════════════
         # CHART 3: Gap Severity Distribution (Donut + Bar)
         # ═══════════════════════════════════════════════════════════
-        col_gap1, col_gap2 = st.columns(2)
+        # Only show gap charts if we have actual gap data
+        has_gaps = (gap_data and gap_data.get("gaps")) or (parsed_result and parsed_result.get("gaps"))
+        gap_source = gap_data if (gap_data and gap_data.get("gaps")) else parsed_result
 
-        with col_gap1:
-            st.markdown("##### 🎯 Gap Impact Distribution")
-            if parsed_result and "gaps" in parsed_result:
-                gaps = parsed_result["gaps"]
+        if has_gaps and gap_source:
+            col_gap1, col_gap2 = st.columns(2)
+
+            with col_gap1:
+                st.markdown("##### 🎯 Gap Impact Distribution")
+                gaps = gap_source["gaps"]
                 severity_counts = {
                     "High Impact": len([g for g in gaps if g.get("impact") == "high"]),
                     "Medium Impact": len([g for g in gaps if g.get("impact") == "medium"]),
@@ -1051,13 +1067,10 @@ elif st.session_state.phase == "results":
                                       font_size=18, showarrow=False)],
                 )
                 st.plotly_chart(fig_donut, use_container_width=True)
-            else:
-                st.info("Gap severity data not available.")
 
-        with col_gap2:
-            st.markdown("##### 📂 Gaps by Category")
-            if parsed_result and "gaps" in parsed_result:
-                gaps = parsed_result["gaps"]
+            with col_gap2:
+                st.markdown("##### 📂 Gaps by Category")
+                gaps = gap_source["gaps"]
                 category_counts = {}
                 for gap in gaps:
                     cat = gap.get("category", "other").capitalize()
@@ -1077,10 +1090,8 @@ elif st.session_state.phase == "results":
                     showlegend=False,
                 )
                 st.plotly_chart(fig_cat, use_container_width=True)
-            else:
-                st.info("Gap category data not available.")
 
-        st.divider()
+            st.divider()
 
         # ═══════════════════════════════════════════════════════════
         # CHART 4: Competitive Feature Comparison (Grouped Bar)
@@ -1188,11 +1199,13 @@ elif st.session_state.phase == "results":
         # ═══════════════════════════════════════════════════════════
         # CHART 6: Competitive Advantage vs. Gaps Balance
         # ═══════════════════════════════════════════════════════════
-        st.markdown("##### ⚖️ Advantage vs. Gap Balance")
+        # Use gap_data for actual gap counts (more reliable than parsed_result)
+        balance_source = gap_data if (gap_data and gap_data.get("gaps")) else parsed_result
+        n_gaps = len(balance_source.get("gaps", [])) if balance_source else 0
+        n_advantages = len(balance_source.get("advantages", [])) if balance_source else 0
 
-        if parsed_result:
-            n_gaps = len(parsed_result.get("gaps", []))
-            n_advantages = len(parsed_result.get("advantages", []))
+        if n_gaps > 0 or n_advantages > 0:
+            st.markdown("##### ⚖️ Advantage vs. Gap Balance")
 
             fig_balance = go.Figure()
             fig_balance.add_trace(go.Bar(
@@ -1221,13 +1234,12 @@ elif st.session_state.phase == "results":
             )
             st.plotly_chart(fig_balance, use_container_width=True)
 
-            # Overall position indicator
             if n_advantages > n_gaps:
-                st.success(f"✅ **Strong Position** — You have more advantages ({n_advantages}) than gaps ({n_gaps}). Focus on protecting your moat.")
+                st.success(f"✅ **Strong Position** — {n_advantages} advantages vs {n_gaps} gaps.")
             elif n_advantages == n_gaps:
-                st.warning(f"⚖️ **Balanced Position** — Equal advantages and gaps ({n_advantages} each). Strategic action needed.")
+                st.warning(f"⚖️ **Balanced** — {n_advantages} advantages, {n_gaps} gaps.")
             else:
-                st.error(f"⚠️ **Vulnerable Position** — More gaps ({n_gaps}) than advantages ({n_advantages}). Prioritize gap closure.")
+                st.error(f"⚠️ **Vulnerable** — {n_gaps} gaps vs {n_advantages} advantages.")
 
     with tab5:
         st.markdown("#### 🔗 Source-Grounded Citations")
